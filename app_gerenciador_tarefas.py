@@ -544,6 +544,52 @@ def render_configurar_acessos():
         st.info("Nenhum acesso registrado ainda.")
 
 
+def render_base_clientes():
+    st.title("👥 Base de Clientes")
+    st.markdown("Visualize a base de clientes, regimes tributários e credenciais de acesso. Atualize senhas de clientes diretamente daqui.")
+
+    acessos = supabase.table("usuarios_clientes").select("*, clientes(nome, regime)").execute().data or []
+    if not acessos:
+        st.info("Nenhum cliente com acesso cadastrado ainda.")
+        return
+
+    df_acessos = pd.DataFrame(acessos)
+    if not df_acessos.empty:
+        df_acessos["empresa"] = df_acessos["clientes"].apply(lambda c: c.get("nome") if isinstance(c, dict) else "-")
+        df_acessos["regime"] = df_acessos["clientes"].apply(lambda c: c.get("regime") if isinstance(c, dict) else "-")
+        df_exib = df_acessos[["empresa", "regime", "email", "senha"]].rename(columns={
+            "empresa": "Nome da Empresa / Razão Social",
+            "regime": "Regime Tributário",
+            "email": "E-mail de Acesso",
+            "senha": "Senha Cadastrada"
+        })
+        st.dataframe(df_exib, use_container_width=True)
+    else:
+        st.info("Nenhum cliente com acesso para exibir.")
+
+    st.markdown("---")
+    st.subheader("Atualizar Senha do Cliente")
+    clientes = carregar_clientes()
+    if not clientes:
+        st.warning("Cadastre ao menos um cliente antes de atualizar senhas.")
+        return
+
+    cliente_selecionado = st.selectbox("Selecione o Cliente:", [c["nome"] for c in clientes])
+    nova_senha = st.text_input("Nova Senha", type="password")
+
+    if st.button("Atualizar Senha"):
+        if not nova_senha:
+            st.error("Informe a nova senha.")
+        else:
+            cliente_id = next(c["id"] for c in clientes if c["nome"] == cliente_selecionado)
+            acesso_res = supabase.table("usuarios_clientes").select("*").eq("cliente_id", cliente_id).execute()
+            if not acesso_res.data:
+                st.error("Nenhum acesso encontrado para esse cliente.")
+            else:
+                supabase.table("usuarios_clientes").update({"senha": nova_senha}).eq("cliente_id", cliente_id).execute()
+                st.success("Senha atualizada com sucesso!")
+
+
 def render_obrigacoes_customizadas():
     st.title("⚙️ Obrigações Customizadas")
     st.markdown("Crie obrigações manuais específicas para clientes e mantenha o painel atualizado.")
@@ -638,6 +684,28 @@ def render_portal_cliente():
         else:
             st.warning("Nenhum guia ou imposto mensal disponível para a competência selecionada.")
 
+    st.markdown("---")
+    st.subheader("🔒 Segurança da Conta")
+    with st.form("form_alterar_senha_cliente"):
+        senha_atual = st.text_input("Senha Atual", type="password")
+        nova_senha = st.text_input("Nova Senha", type="password")
+        confirmar_senha = st.text_input("Confirmação da Nova Senha", type="password")
+        if st.form_submit_button("Alterar Senha"):
+            if not senha_atual or not nova_senha or not confirmar_senha:
+                st.error("Preencha todos os campos de senha.")
+            elif nova_senha != confirmar_senha:
+                st.error("A confirmação da nova senha não confere.")
+            else:
+                acesso_res = supabase.table("usuarios_clientes").select("*").eq("cliente_id", cliente["id"]).eq("perfil", "cliente").execute()
+                if not acesso_res.data:
+                    st.error("Não foi possível encontrar seus dados de acesso.")
+                elif acesso_res.data[0].get("senha") != senha_atual:
+                    st.error("Senha atual incorreta.")
+                else:
+                    supabase.table("usuarios_clientes").update({"senha": nova_senha}).eq("id", acesso_res.data[0]["id"]).execute()
+                    st.success("Senha alterada com sucesso!")
+                    st.rerun()
+
 
 # --- FLUXO PRINCIPAL ---
 if not st.session_state.logado:
@@ -664,7 +732,8 @@ else:
             "Documentos e Tarefas",
             "Cadastrar Cliente",
             "Gerenciar Obrigações",
-            "Obrigações Customizadas"
+            "Obrigações Customizadas",
+            "👥 Base de Clientes"
         ])
 
         if opcao == "Dashboard Geral":
@@ -677,6 +746,8 @@ else:
             render_gerenciar_obrigacoes()
         elif opcao == "Obrigações Customizadas":
             render_obrigacoes_customizadas()
+        elif opcao == "👥 Base de Clientes":
+            render_base_clientes()
     else:
         st.sidebar.write(f"Conectado como: **CLIENTE**")
         st.sidebar.markdown("---")
