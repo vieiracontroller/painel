@@ -3,7 +3,6 @@ import pandas as pd
 import plotly.express as px
 from datetime import datetime
 from supabase import create_client, Client
-from supabase.lib.client_options import SyncClientOptions
 
 # Configuração da página
 st.set_page_config(page_title="Gestão Vieira Controller", layout="wide")
@@ -35,8 +34,14 @@ except Exception as e:
 # --- CONFIGURAÇÕES DE ENUMERADORES ---
 LISTA_ANOS = ["2025", "2026", "2027"]
 LISTA_MESES = ["Janeiro", "Fevereiro", "Março", "Abril", "Maio", "Junho", "Julho", "Agosto", "Setembro", "Outubro", "Novembro", "Dezembro"]
-TIPOS_DOCS_FIXOS = ["Contrato Social / Alterações", "Cartão CNPJ", "Procuração Eletrônica", "Inscrição Estadual/Municipal", "Senha de Acessos / Códigos", "Outros Documentos Fixos"]
-
+TIPOS_DOCS_FIXOS = [
+    "Contrato Social / Alterações",
+    "Cartão CNPJ",
+    "Procuração Eletrônica",
+    "Inscrição Estadual/Municipal",
+    "Senha de Acessos / Códigos",
+    "Outros Documentos Fixos"
+]
 OBRIGACOES_BASE = {
     "Simples Nacional": [
         {"obrigacao": "DAS", "prazo": "Até o dia 20", "periodicidade": "Mensal"},
@@ -60,287 +65,504 @@ OBRIGACOES_BASE = {
 # --- CONTROLE DE SESSÃO / LOGIN ---
 if 'logado' not in st.session_state:
     st.session_state.logado = False
-    st.session_state.perfil = None  
+    st.session_state.perfil = None
     st.session_state.cliente_id_logado = None
+
 
 def realizar_login(usuario, senha):
     if usuario == "vieiracontroller" and senha == "123456":
         st.session_state.logado = True
         st.session_state.perfil = "escritorio"
+        st.session_state.cliente_id_logado = None
         st.rerun()
-    else:
-        res = supabase.table("usuarios_clientes").select("*").eq("email", usuario).eq("senha", senha).execute()
-        if res.data:
-            st.session_state.logado = True
-            st.session_state.perfil = "cliente"
-            st.session_state.cliente_id_logado = res.data[0]["cliente_id"]
-            st.rerun()
-        else:
-            st.error("Usuário ou senha incorretos.")
 
+    res = supabase.table("usuarios_clientes").select("*").eq("email", usuario).eq("senha", senha).execute()
+    if res.data:
+        st.session_state.logado = True
+        st.session_state.perfil = "cliente"
+        st.session_state.cliente_id_logado = res.data[0]["cliente_id"]
+        st.rerun()
+
+    st.error("Usuário ou senha incorretos.")
+
+
+# --- FUNÇÕES DE DADOS ---
+def carregar_clientes():
+    res = supabase.table("clientes").select("*").order("nome").execute()
+    return res.data or []
+
+
+def carregar_tarefas():
+    res = supabase.table("tarefas").select("*").execute()
+    return res.data or []
+
+
+def carregar_documentos_fixos():
+    res = supabase.table("documentos_fixos").select("*, clientes(nome)").execute()
+    return res.data or []
+
+
+def carregar_arquivos_escritorio():
+    res = supabase.table("arquivos_escritorio").select("*").execute()
+    return res.data or []
+
+
+def carregar_acessos():
+    res = supabase.table("usuarios_clientes").select("*, clientes(nome)").execute()
+    return res.data or []
+
+
+def df_from_data(data):
+    return pd.DataFrame(data) if data else pd.DataFrame()
+
+
+def extrapolar_tarefas_por_mes(df_tarefas, mes, ano):
+    if df_tarefas.empty:
+        return df_tarefas
+    return df_tarefas[(df_tarefas["mes"] == mes) & (df_tarefas["ano"] == ano)]
+
+
+# --- MÓDULOS VISUAIS ---
+def render_dashboard():
+    st.title("📊 Painel de Controle Vieira Controller")
+    st.markdown("Bem-vindo(a) ao centro de monitoramento da contabilidade. Acompanhe clientes, tarefas e documentos em tempo real.")
+
+    clientes = carregar_clientes()
+    tarefas = carregar_tarefas()
+    documentos_fixos = carregar_documentos_fixos()
+    arquivos = carregar_arquivos_escritorio()
+
+    df_clientes = df_from_data(clientes)
+    df_tarefas = df_from_data(tarefas)
+    df_documentos_fixos = df_from_data(documentos_fixos)
+    df_arquivos = df_from_data(arquivos)
+
+    hoje = datetime.now()
+    mes_atual = LISTA_MESES[hoje.month - 1]
+    ano_atual = str(hoje.year)
+    df_tarefas_mes = extrapolar_tarefas_por_mes(df_tarefas, mes_atual, ano_atual)
+
+    total_clientes = len(df_clientes)
+    tarefas_pendentes = int(df_tarefas_mes[df_tarefas_mes["status"] == "Pendente"].shape[0]) if not df_tarefas_mes.empty else 0
+    tarefas_concluidas = int(df_tarefas_mes[df_tarefas_mes["status"] == "Concluído"].shape[0]) if not df_tarefas_mes.empty else 0
+    documentos_processados = len(df_documentos_fixos) + len(df_arquivos)
+
+    col1, col2, col3 = st.columns(3)
+    col1.metric("Clientes ativos", total_clientes, delta=None)
+    col2.metric("Tarefas pendentes neste mês", tarefas_pendentes, delta=None)
+    col3.metric("Tarefas concluídas neste mês", tarefas_concluidas, delta=None)
+
+    col4, col5, col6 = st.columns(3)
+    col4.metric("Documentos processados", documentos_processados, delta=None)
+    col5.metric("Mês atual", mes_atual, delta=None)
+    col6.metric("Ano", ano_atual, delta=None)
+
+    st.markdown("---")
+
+    if not df_tarefas_mes.empty:
+        df_status = (
+            df_tarefas_mes["status"].fillna("Sem status")
+            .value_counts()
+            .reset_index()
+            .rename(columns={"index": "Status", "status": "Quantidade"})
+        )
+        fig_status = px.bar(df_status, x="Status", y="Quantidade", color="Status", title="Status das obrigações do mês", text="Quantidade")
+        fig_status.update_layout(showlegend=False, height=320)
+        st.plotly_chart(fig_status, use_container_width=True)
+
+        if not df_clientes.empty:
+            df_pendentes = df_tarefas_mes[df_tarefas_mes["status"] == "Pendente"].merge(df_clientes[["id", "nome"]], left_on="cliente_id", right_on="id", how="left")
+            if not df_pendentes.empty:
+                df_pendentes_por_cliente = (
+                    df_pendentes["nome"].value_counts().reset_index().rename(columns={"index": "Cliente", "nome": "Pendentes"})
+                )
+                fig_pendentes = px.bar(df_pendentes_por_cliente, x="Cliente", y="Pendentes", title="Tarefas pendentes por cliente", text="Pendentes")
+                fig_pendentes.update_layout(xaxis_tickangle=-45, height=320)
+                st.plotly_chart(fig_pendentes, use_container_width=True)
+    else:
+        st.info("Ainda não há tarefas registradas para o mês atual.")
+
+    st.markdown("---")
+    st.markdown("### Últimas tarefas cadastradas")
+    if not df_tarefas.empty and not df_clientes.empty:
+        df_exibicao = df_tarefas.merge(df_clientes[["id", "nome"]], left_on="cliente_id", right_on="id", how="left")
+        df_exibicao = df_exibicao[["nome", "obrigacao", "periodicidade", "mes", "ano", "vencimento", "status"]]
+        df_exibicao.columns = ["Cliente", "Obrigação", "Periodicidade", "Mês", "Ano", "Prazo", "Status"]
+        st.dataframe(df_exibicao.sort_values(by=["Ano", "Mês"], ascending=False).head(10), use_container_width=True)
+    else:
+        st.info("Cadastre um cliente e suas obrigações para começar a preencher o painel.")
+
+
+def render_upload_documentos():
+    st.title("📌 Upload de Documentos e Conclusão de Atividades")
+    st.markdown("Use este espaço para enviar documentos fixos e concluir tarefas diretamente no banco.")
+
+    clientes = carregar_clientes()
+    tarefas = carregar_tarefas()
+    lista_clientes = clientes
+
+    if not lista_clientes:
+        st.warning("Cadastre ao menos um cliente antes de usar os uploads e tarefas.")
+        return
+
+    tab_upload, tab_tarefas = st.tabs(["Documentos Institucionais", "Tarefas Pendentes"])
+
+    with tab_upload:
+        with st.form("form_doc_fixo"):
+            cliente_selecionado = st.selectbox("Selecione o Cliente:", [c["nome"] for c in lista_clientes])
+            tipo_doc = st.selectbox("Tipo de Documento:", TIPOS_DOCS_FIXOS)
+            arquivo_upload = st.file_uploader("Selecione o arquivo (PDF/JPG/PNG):", type=["pdf", "jpg", "png"])
+
+            if st.form_submit_button("Salvar Documento Institucional"):
+                if not arquivo_upload:
+                    st.error("Anexe um arquivo antes de salvar.")
+                else:
+                    id_cliente = next(c["id"] for c in lista_clientes if c["nome"] == cliente_selecionado)
+                    nome_limpo = f"{id_cliente}_{int(datetime.now().timestamp())}_{arquivo_upload.name}"
+                    caminho_storage = f"arquivos/{nome_limpo}"
+
+                    supabase.storage.from_("documentos-fixos").upload(
+                        path=caminho_storage,
+                        file=arquivo_upload.getvalue(),
+                        file_options={"content-type": arquivo_upload.type}
+                    )
+                    supabase.table("documentos_fixos").insert({
+                        "cliente_id": id_cliente,
+                        "tipo_documento": tipo_doc,
+                        "nome_arquivo": arquivo_upload.name,
+                        "caminho_storage": caminho_storage
+                    }).execute()
+                    st.success(f"Documento institucional '{tipo_doc}' enviado com sucesso.")
+
+        st.markdown("---")
+        st.markdown("### Documentos institucionais já cadastrados")
+        documentos_fixos = carregar_documentos_fixos()
+        if documentos_fixos:
+            for doc in documentos_fixos:
+                cliente_nome = doc.get("clientes", {}).get("nome", "-") if doc.get("clientes") else "-"
+                st.write(f"**{doc['nome_arquivo']}** — Cliente: {cliente_nome} — Tipo: {doc['tipo_documento']}")
+        else:
+            st.info("Nenhum documento institucional cadastrado ainda.")
+
+    with tab_tarefas:
+        st.markdown("### Tarefas pendentes")
+        df_tarefas = df_from_data(tarefas)
+        df_clientes = df_from_data(clientes)
+
+        if df_tarefas.empty:
+            st.info("Não há tarefas cadastradas.")
+            return
+
+        tarefas_pendentes = df_tarefas[df_tarefas["status"] == "Pendente"]
+        if tarefas_pendentes.empty:
+            st.success("Todas as tarefas estão concluídas.")
+            return
+
+        tarefas_pendentes = tarefas_pendentes.merge(df_clientes[["id", "nome"]], left_on="cliente_id", right_on="id", how="left")
+        tarefas_pendentes = tarefas_pendentes.sort_values(by=["ano", "mes"])
+
+        for _, tarefa in tarefas_pendentes.iterrows():
+            with st.expander(f"{tarefa['nome']} — {tarefa['obrigacao']} ({tarefa['mes']}/{tarefa['ano']})"):
+                st.write(f"**Cliente:** {tarefa['nome']}")
+                st.write(f"**Obrigação:** {tarefa['obrigacao']}")
+                st.write(f"**Vencimento:** {tarefa['vencimento']}")
+                st.write(f"**Periodicidade:** {tarefa['periodicidade']}")
+                st.write(f"**Prioridade:** {tarefa.get('alerta', '✅ Normal')}")
+
+                arquivo_guia = st.file_uploader(
+                    "Anexar guia ou comprovante", type=["pdf", "xml", "zip", "xlsx"], key=f"file_tarefa_{tarefa['id']}"
+                )
+                if st.button("Concluir Atividade", key=f"btn_tarefa_{tarefa['id']}"):
+                    update_data = {
+                        "status": "Concluído",
+                        "alerta": "✅ Normal",
+                        "data_conclusao": datetime.now().strftime("%d/%m/%Y %H:%M")
+                    }
+                    if arquivo_guia:
+                        nome_limpo = f"{tarefa['id']}_{arquivo_guia.name}"
+                        caminho_storage = f"guias/{nome_limpo}"
+                        supabase.storage.from_("documentos-clientes").upload(
+                            path=caminho_storage,
+                            file=arquivo_guia.getvalue(),
+                            file_options={"content-type": arquivo_guia.type}
+                        )
+                        supabase.table("arquivos_escritorio").insert({
+                            "cliente_id": int(tarefa["cliente_id"]),
+                            "ano": tarefa["ano"],
+                            "mes": tarefa["mes"],
+                            "nome_arquivo": arquivo_guia.name,
+                            "caminho_storage": caminho_storage,
+                            "data_publicacao": datetime.now().strftime("%d/%m/%Y %H:%M")
+                        }).execute()
+
+                    supabase.table("tarefas").update(update_data).eq("id", int(tarefa["id"])).execute()
+                    st.success("Tarefa marcada como concluída.")
+                    st.experimental_rerun()
+
+
+def render_cadastrar_cliente():
+    st.title("➕ Cadastro de Cliente e Acesso")
+    st.markdown("Registre o cliente e crie o usuário de acesso do cliente em um único fluxo.")
+
+    if "empresa_nome" not in st.session_state:
+        st.session_state["empresa_nome"] = ""
+        st.session_state["empresa_cnpj"] = ""
+        st.session_state["empresa_ie"] = ""
+        st.session_state["empresa_email"] = ""
+        st.session_state["empresa_telefone"] = ""
+        st.session_state["empresa_regime"] = "Simples Nacional"
+        st.session_state["empresa_socios"] = ""
+        st.session_state["empresa_tem_folha"] = False
+        st.session_state["usuario_nome"] = ""
+        st.session_state["usuario_email"] = ""
+        st.session_state["usuario_senha"] = ""
+
+    with st.form("form_cliente_unificado"):
+        st.subheader("Dados da Empresa")
+        nome = st.text_input("Razão Social / Nome Fantasia", key="empresa_nome")
+        email_empresa = st.text_input("E-mail institucional", key="empresa_email")
+        telefone = st.text_input("Telefone", key="empresa_telefone")
+
+        col1, col2 = st.columns(2)
+        with col1:
+            cnpj = st.text_input("CNPJ", key="empresa_cnpj")
+        with col2:
+            ie = st.text_input("Inscrição Estadual (IE)", key="empresa_ie")
+
+        regime = st.selectbox("Regime Tributário", ["Simples Nacional", "Lucro Presumido", "Lucro Real"], key="empresa_regime")
+        socios = st.text_area("Sócios", key="empresa_socios")
+        tem_folha = st.checkbox("Possui folha de pagamento?", key="empresa_tem_folha")
+
+        st.markdown("---")
+        st.subheader("Dados de Acesso do Cliente")
+        usuario_nome = st.text_input("Nome do usuário responsável", key="usuario_nome")
+        usuario_email = st.text_input("E-mail de Login", key="usuario_email")
+        usuario_senha = st.text_input("Senha de Acesso inicial", type="password", key="usuario_senha")
+
+        if st.form_submit_button("Salvar Cadastro"):
+            if not nome or not cnpj or not ie:
+                st.error("Por favor, preencha Razão Social, CNPJ e Inscrição Estadual.")
+            elif not usuario_nome or not usuario_email or not usuario_senha:
+                st.error("Por favor, preencha os dados de acesso do cliente.")
+            else:
+                try:
+                    ins_res = supabase.table("clientes").insert({
+                        "nome": nome,
+                        "cnpj": cnpj,
+                        "inscricao_estadual": ie,
+                        "regime": regime,
+                        "email": email_empresa,
+                        "telefone": telefone,
+                        "socios": socios,
+                        "tem_folha": tem_folha
+                    }).execute()
+
+                    if not ins_res.data or len(ins_res.data) == 0:
+                        raise ValueError("Falha ao criar o cliente no Supabase.")
+
+                    cliente_id = ins_res.data[0]["id"]
+                    supabase.table("usuarios_clientes").insert({
+                        "cliente_id": cliente_id,
+                        "email": usuario_email,
+                        "senha": usuario_senha,
+                        "perfil": "cliente",
+                        "nome": usuario_nome
+                    }).execute()
+
+                    for ob in OBRIGACOES_BASE[regime]:
+                        supabase.table("tarefas").insert({
+                            "cliente_id": cliente_id,
+                            "obrigacao": ob["obrigacao"],
+                            "vencimento": ob["prazo"],
+                            "periodicidade": ob["periodicidade"],
+                            "mes": LISTA_MESES[datetime.now().month - 1],
+                            "ano": str(datetime.now().year),
+                            "alerta": "✅ Normal",
+                            "status": "Pendente"
+                        }).execute()
+
+                    st.success("Cliente e Usuário de Acesso criados com sucesso!")
+                    st.session_state["empresa_nome"] = ""
+                    st.session_state["empresa_cnpj"] = ""
+                    st.session_state["empresa_ie"] = ""
+                    st.session_state["empresa_email"] = ""
+                    st.session_state["empresa_telefone"] = ""
+                    st.session_state["empresa_regime"] = "Simples Nacional"
+                    st.session_state["empresa_socios"] = ""
+                    st.session_state["empresa_tem_folha"] = False
+                    st.session_state["usuario_nome"] = ""
+                    st.session_state["usuario_email"] = ""
+                    st.session_state["usuario_senha"] = ""
+                    st.experimental_rerun()
+                except Exception as e:
+                    st.error(f"Erro ao salvar cadastro: {e}")
+
+
+def render_configurar_acessos():
+    st.title("🔑 Gerenciamento de Acessos")
+    st.markdown("Associe credenciais aos clientes e controle o perfil de acesso.")
+
+    clientes = carregar_clientes()
+    if not clientes:
+        st.warning("Cadastre ao menos um cliente antes de liberar acessos.")
+        return
+
+    with st.form("form_acesso"):
+        cliente_selecionado = st.selectbox("Cliente:", [c["nome"] for c in clientes])
+        email = st.text_input("E-mail/Usuário de Login")
+        senha = st.text_input("Senha Provisória", type="password")
+        perfil = st.selectbox("Perfil de Acesso:", ["cliente", "administrador"])
+
+        if st.form_submit_button("Gerar Usuário"):
+            if not email or not senha:
+                st.error("Preencha e-mail e senha para liberar o acesso.")
+            else:
+                cliente_id = next(c["id"] for c in clientes if c["nome"] == cliente_selecionado)
+                supabase.table("usuarios_clientes").insert({
+                    "cliente_id": cliente_id,
+                    "email": email,
+                    "senha": senha,
+                    "perfil": perfil
+                }).execute()
+                st.success("Acesso criado com sucesso.")
+
+    st.markdown("---")
+    st.markdown("### Acessos já cadastrados")
+    acessos = carregar_acessos()
+    if acessos:
+        for acesso in acessos:
+            cliente_nome = acesso.get("clientes", {}).get("nome", "-") if acesso.get("clientes") else "-"
+            st.write(f"Usuário: **{acesso['email']}** | Cliente: **{cliente_nome}** | Perfil: **{acesso.get('perfil', 'cliente')}**")
+    else:
+        st.info("Nenhum acesso registrado ainda.")
+
+
+def render_obrigacoes_customizadas():
+    st.title("⚙️ Obrigações Customizadas")
+    st.markdown("Crie obrigações manuais específicas para clientes e mantenha o painel atualizado.")
+
+    clientes = carregar_clientes()
+    if not clientes:
+        st.warning("Cadastre ao menos um cliente antes de lançar obrigações customizadas.")
+        return
+
+    with st.form("form_custom"):
+        cliente_selecionado = st.selectbox("Selecione o Cliente:", [c["nome"] for c in clientes])
+        nome_ob = st.text_input("Nome do Imposto/Obrigação")
+        descricao_ob = st.text_area("Descrição da Obrigação")
+        prazo_ob = st.text_input("Vencimento por extenso")
+        periodicidade_ob = st.selectbox("Periodicidade:", ["Mensal", "Trimestral", "Anual", "Eventual"], index=3)
+        mes_ob = st.selectbox("Mês:", LISTA_MESES, index=datetime.now().month - 1)
+        ano_ob = st.selectbox("Ano:", LISTA_ANOS, index=1)
+        alerta_ob = st.selectbox("Prioridade:", ["🚨 Urgente", "⚠️ Atenção", "✅ Normal"])
+
+        if st.form_submit_button("Lançar no Painel"):
+            if not nome_ob or not descricao_ob or not prazo_ob:
+                st.error("Preencha nome, descrição e prazo da obrigação.")
+            else:
+                cliente_id = next(c["id"] for c in clientes if c["nome"] == cliente_selecionado)
+                supabase.table("tarefas").insert({
+                    "cliente_id": cliente_id,
+                    "obrigacao": nome_ob,
+                    "descricao": descricao_ob,
+                    "vencimento": prazo_ob,
+                    "periodicidade": periodicidade_ob,
+                    "mes": mes_ob,
+                    "ano": ano_ob,
+                    "alerta": alerta_ob,
+                    "status": "Pendente"
+                }).execute()
+                st.success("Obrigação customizada adicionada ao painel.")
+
+
+def render_portal_cliente():
+    cli_res = supabase.table("clientes").select("*").eq("id", st.session_state.cliente_id_logado).execute()
+    if not cli_res.data:
+        st.error("Cliente não encontrado.")
+        return
+
+    cliente = cli_res.data[0]
+    st.title(f"👤 Portal do Cliente - {cliente['nome']}")
+    st.markdown("Acesse documentos institucionais e guias fiscais lançadas para o seu cliente.")
+
+    st.markdown("### Documentos institucionais")
+    docs_fixos = supabase.table("documentos_fixos").select("*").eq("cliente_id", cliente["id"]).execute().data or []
+    if docs_fixos:
+        col1, col2 = st.columns(2)
+        for index, doc in enumerate(docs_fixos):
+            target_col = col1 if index % 2 == 0 else col2
+            with target_col:
+                st.write(f"📂 **{doc['tipo_documento']}**")
+                st.caption(f"Arquivo: {doc['nome_arquivo']}")
+                try:
+                    assinatura = supabase.storage.from_("documentos-fixos").create_signed_url(doc["caminho_storage"], 60)
+                    st.markdown(f"<a href=\"{assinatura['signedUrl']}\" target=\"_blank\"><button style=\"background-color:#3498db;color:white;border:none;padding:8px 14px;border-radius:4px;cursor:pointer;width:100%;\">Visualizar / Baixar</button></a>", unsafe_allow_html=True)
+                except Exception:
+                    st.caption("Erro ao gerar link seguro.")
+    else:
+        st.info("Nenhum documento institucional anexado ainda.")
+
+    st.markdown("---")
+    st.markdown("### Guias e impostos lançados")
+    ano_filtrado = st.selectbox("Filtrar por ano:", LISTA_ANOS, index=1)
+    mes_filtrado = st.selectbox("Filtrar por mês:", LISTA_MESES, index=datetime.now().month - 1)
+
+    arquivos = supabase.table("arquivos_escritorio").select("*").eq("cliente_id", cliente["id"]).eq("ano", ano_filtrado).eq("mes", mes_filtrado).execute().data or []
+    if arquivos:
+        for arq in arquivos:
+            col_arq, col_btn = st.columns([3, 1])
+            with col_arq:
+                st.markdown(f"📄 **{arq['nome_arquivo']}**")
+                st.caption(f"Disponibilizado em: {arq['data_publicacao']}")
+            with col_btn:
+                try:
+                    assinatura = supabase.storage.from_("documentos-clientes").create_signed_url(arq["caminho_storage"], 60)
+                    st.markdown(f"<a href=\"{assinatura['signedUrl']}\" target=\"_blank\"><button style=\"background-color:#2ecc71;color:white;border:none;padding:8px 14px;border-radius:4px;cursor:pointer;\">⬇️ Baixar</button></a>", unsafe_allow_html=True)
+                except Exception:
+                    st.error("Erro ao gerar link de download.")
+    else:
+        st.warning("Nenhuma guia disponível para o período selecionado.")
+
+
+# --- FLUXO PRINCIPAL ---
 if not st.session_state.logado:
     st.title("🔑 Acesso ao Sistema - Vieira Controller")
-    col_l1, col_l2, col_l3 = st.columns([1, 2, 1])
-    with col_l2:
+    st.markdown("Faça login para acessar o painel de gestão contábil e fiscal.")
+    col1, col2, col3 = st.columns([1, 2, 1])
+    with col2:
         with st.form("form_login"):
-            user_input = st.text_input("Usuário ou E-mail")
-            pass_input = st.text_input("Senha", type="password")
+            usuario = st.text_input("Usuário ou E-mail")
+            senha = st.text_input("Senha", type="password")
             if st.form_submit_button("Entrar"):
-                realizar_login(user_input, pass_input)
+                realizar_login(usuario, senha)
 else:
-    st.sidebar.write(f"Conectado como: **{st.session_state.perfil.upper()}**")
+    st.sidebar.header("Navegação")
     if st.sidebar.button("Sair / Logout"):
         st.session_state.logado = False
         st.session_state.perfil = None
         st.session_state.cliente_id_logado = None
-        st.rerun()
-    st.sidebar.markdown("---")
+        st.experimental_rerun()
 
-    # --- VISÃO 1: ESCRITÓRIO (CONTADOR) ---
     if st.session_state.perfil == "escritorio":
-        menu = st.sidebar.radio("Navegação do Escritório:", [
-            "Dashboard Geral", 
-            "Upload de Documentos Fixos",
-            "Cadastrar Cliente", 
-            "Configurar Acessos", 
-            "Gerenciar Obrigações Customizadas"
+        opcao = st.sidebar.radio("Menu:", [
+            "Dashboard Geral",
+            "Documentos e Tarefas",
+            "Cadastrar Cliente",
+            "Configurar Acessos",
+            "Obrigações Customizadas"
         ])
-        
-        try:
-            clientes_res = supabase.table("clientes").select("*").order("nome").execute()
-            lista_clientes_db = clientes_res.data if clientes_res.data else []
-        except Exception as e:
-            st.error(f"Erro de conexão Supabase: {e}")
-            st.stop()
 
-        if menu == "Dashboard Geral":
-            st.title("📊 Painel de Controle de Obrigações Contábeis")
-            
-            st.markdown("### 🔍 Filtros de Visualização")
-            col_f1, col_f2, col_f3 = st.columns(3)
-            with col_f1:
-                filtro_cliente = st.selectbox("Filtrar por Cliente:", ["Todos os Clientes"] + [c["nome"] for c in lista_clientes_db])
-            with col_f2:
-                filtro_mes = st.selectbox("Filtrar por Mês Competência:", ["Todos os Meses"] + LISTA_MESES, index=datetime.now().month - 1)
-            with col_f3:
-                filtro_ano = st.selectbox("Filtrar por Ano Competência:", ["Todos os Anos"] + LISTA_ANOS, index=1)
-
-            tarefas_res = supabase.table("tarefas").select("*").execute()
-            df_tarefas = pd.DataFrame(tarefas_res.data) if tarefas_res.data else pd.DataFrame()
-            df_clientes = pd.DataFrame(lista_clientes_db)
-
-            if not df_tarefas.empty and not df_clientes.empty:
-                df_fused = pd.merge(df_tarefas, df_clientes, left_on="cliente_id", right_on="id")
-                
-                if filtro_cliente != "Todos os Clientes":
-                    df_fused = df_fused[df_fused["nome"] == filtro_cliente]
-                if filtro_mes != "Todos os Meses":
-                    df_fused = df_fused[df_fused["mes"] == filtro_mes]
-                if filtro_ano != "Todos os Anos":
-                    df_fused = df_fused[df_fused["ano"] == filtro_ano]
-
-                st.markdown("#### 📈 Indicadores de Produtividade do Período")
-                if not df_fused.empty:
-                    contagem = df_fused["status"].value_counts().to_dict()
-                    concluidas = contagem.get("Concluído", 0)
-                    pendentes = contagem.get("Pendente", 0)
-                    
-                    col_m1, col_m2, col_m3 = st.columns(3)
-                    col_m1.metric("Obrigações Concluídas ✅", concluidas)
-                    col_m2.metric("Obrigações Pendentes ⏳", pendentes)
-                    col_m3.metric("Total Filtrado", len(df_fused))
-                    
-                    df_grafico = df_fused["status"].value_counts().reset_index()
-                    df_grafico.columns = ["Status", "Quantidade"]
-                    fig = px.bar(df_grafico, x="Status", y="Quantidade", color="Status", 
-                                 color_discrete_map={"Concluído": "#2ecc71", "Pendente": "#e74c3c"}, text_auto=True, height=280)
-                    st.plotly_chart(fig, use_container_width=True)
-                    
-                    st.markdown("#### 📋 Listagem de Obrigações")
-                    df_exibicao = df_fused[["alerta", "nome", "obrigacao", "periodicidade", "mes", "ano", "vencimento", "status"]]
-                    df_exibicao.columns = ["Prioridade", "Cliente", "Obrigação", "Periodicidade", "Mês", "Ano", "Prazo", "Status"]
-                    st.dataframe(df_exibicao, use_container_width=True, hide_index=True)
-
-                    st.markdown("### ⚡ Enviar Documento Mensal e Concluir Tarefa")
-                    opcoes_tarefas = {f"{row['nome']} - {row['obrigacao']} ({row['mes']}/{row['ano']})": row['id_x'] for idx, row in df_fused.iterrows() if row['status'] == 'Pendente'}
-                    
-                    if opcoes_tarefas:
-                        with st.form("form_baixa_real"):
-                            tarefa_selecionada = st.selectbox("Escolha a obrigação para dar baixa:", list(opcoes_tarefas.keys()))
-                            arquivo_guia = st.file_uploader("Anexar Guia Fiscal (PDF/XML):", type=["pdf", "xml", "zip", "xlsx"])
-                            
-                            if st.form_submit_button("Enviar para o Cliente e Marcar como Concluído"):
-                                id_tarefa = opcoes_tarefas[tarefa_selecionada]
-                                tarefa_objeto = next(t for t in tarefas_res.data if t["id"] == id_tarefa)
-                                
-                                if arquivo_guia:
-                                    nome_limpo = f"{id_tarefa}_{arquivo_guia.name}"
-                                    caminho_storage = f"guias/{nome_limpo}"
-                                    
-                                    supabase.storage.from_("documentos-clientes").upload(
-                                        path=caminho_storage, file=arquivo_guia.getvalue(),
-                                        file_options={"content-type": arquivo_guia.type}
-                                    )
-                                    
-                                    supabase.table("arquivos_escritorio").insert({
-                                        "cliente_id": tarefa_objeto["cliente_id"], "ano": tarefa_objeto["ano"], "mes": tarefa_objeto["mes"],
-                                        "nome_arquivo": arquivo_guia.name, "caminho_storage": caminho_storage,
-                                        "data_publicacao": datetime.now().strftime("%d/%m/%Y %H:%M")
-                                    }).execute()
-
-                                supabase.table("tarefas").update({"status": "Concluído", "alerta": "✅ Normal"}).eq("id", id_tarefa).execute()
-                                st.success("Guia enviada com sucesso!")
-                                st.rerun()
-                    else:
-                        st.success("🎉 Todas as obrigações filtradas já estão resolvidas!")
-                else:
-                    st.info("Nenhuma obrigação encontrada para este filtro.")
-
-        elif menu == "Upload de Documentos Fixos":
-            st.title("📌 Upload de Documentos Fixos / Institucionais")
-            st.caption("Arquivos permanentes (Contrato Social, CNPJ) salvos no balde seguro 'documentos-fixos'")
-            
-            if lista_clientes_db:
-                with st.form("form_doc_fixo"):
-                    c_nome = st.selectbox("Selecione o Cliente:", [c["nome"] for c in lista_clientes_db])
-                    tipo_doc = st.selectbox("Tipo de Documento:", TIPOS_DOCS_FIXOS)
-                    arquivo_upload = st.file_uploader("Selecione o Arquivo (PDF/Imagens):", type=["pdf", "jpg", "png"])
-                    
-                    if st.form_submit_button("Salvar Documento Fixo"):
-                        if arquivo_upload:
-                            id_c = next(c["id"] for c in lista_clientes_db if c["nome"] == c_nome)
-                            nome_limpo = f"{id_c}_{int(datetime.now().timestamp())}_{arquivo_upload.name}"
-                            caminho_storage = f"arquivos/{nome_limpo}"
-                            
-                            # Envia direcionado para o balde exclusivo 'documentos-fixos'
-                            supabase.storage.from_("documentos-fixos").upload(
-                                path=caminho_storage, file=arquivo_upload.getvalue(),
-                                file_options={"content-type": arquivo_upload.type}
-                            )
-                            
-                            # Registra na tabela de controle
-                            supabase.table("documentos_fixos").insert({
-                                "cliente_id": id_c, "tipo_documento": tipo_doc,
-                                "nome_arquivo": arquivo_upload.name, "caminho_storage": caminho_storage
-                            }).execute()
-                            
-                            st.success(f"O documento '{tipo_doc}' foi guardado com sucesso!")
-                        else:
-                            st.error("Por favor, anexe um arquivo antes de salvar.")
-
-        elif menu == "Cadastrar Cliente":
-            st.title("➕ Cadastrar Novo Cliente")
-            with st.form("form_cliente"):
-                col_c1, col_c2 = st.columns(2)
-                with col_c1:
-                    nome = st.text_input("Razão Social")
-                    cnpj = st.text_input("CNPJ")
-                    regime = st.selectbox("Regime Tributário", ["Simples Nacional", "Lucro Presumido", "Lucro Real"])
-                with col_c2:
-                    email = st.text_input("E-mail Comercial")
-                    telefone = st.text_input("Telefone")
-                    socios = st.text_area("Sócios")
-                
-                tem_folha = st.checkbox("Possui folha de pagamento?")
-                
-                if st.form_submit_button("Salvar Cliente"):
-                    if nome and cnpj:
-                        ins_res = supabase.table("clientes").insert({
-                            "nome": nome, "cnpj": cnpj, "regime": regime, "email": email, "telefone": telefone, "socios": socios, "tem_folha": tem_folha
-                        }).execute()
-                        
-                        if ins_res.data:
-                            novo_id = ins_res.data[0]["id"]
-                            for ob in OBRIGACOES_BASE[regime]:
-                                supabase.table("tarefas").insert({
-                                    "cliente_id": novo_id, "obrigacao": ob["obrigacao"], "vencimento": ob["prazo"],
-                                    "periodicidade": ob["periodicidade"], "mes": LISTA_MESES[datetime.now().month - 1], "ano": "2026"
-                                }).execute()
-                            st.success(f"Cliente {nome} salvo com sucesso!")
-
-        elif menu == "Configurar Acessos":
-            st.title("🔑 Credenciais de Acesso do Cliente")
-            if lista_clientes_db:
-                with st.form("form_acesso"):
-                    c_nome = st.selectbox("Escolha o Cliente:", [c["nome"] for c in lista_clientes_db])
-                    c_email = st.text_input("E-mail/Usuário de Login")
-                    c_senha = st.text_input("Senha Provisória", type="password")
-                    
-                    if st.form_submit_button("Gerar Usuário"):
-                        id_c = next(c["id"] for c in lista_clientes_db if c["nome"] == c_nome)
-                        supabase.table("usuarios_clientes").insert({"cliente_id": id_c, "email": c_email, "senha": c_senha}).execute()
-                        st.success("Acesso liberado!")
-
-        elif menu == "Gerenciar Obrigações Customizadas":
-            st.title("⚙️ Lançar Obrigação Manual/Avulsa")
-            if lista_clientes_db:
-                with st.form("form_custom"):
-                    c_nome = st.selectbox("Selecione o Cliente:", [c["nome"] for c in lista_clientes_db])
-                    nome_ob = st.text_input("Nome do Imposto/Obrigação")
-                    prazo_ob = st.text_input("Vencimento por extenso")
-                    m_ob = st.selectbox("Mês:", LISTA_MESES, index=datetime.now().month - 1)
-                    a_ob = st.selectbox("Ano:", LISTA_ANOS, index=1)
-                    alerta_ob = st.selectbox("Prioridade:", ["🚨 Urgente", "⚠️ Atenção", "✅ Normal"])
-                    
-                    if st.form_submit_button("Lançar no Painel"):
-                        id_c = next(c["id"] for c in lista_clientes_db if c["nome"] == c_nome)
-                        supabase.table("tarefas").insert({
-                            "cliente_id": id_c, "obrigacao": nome_ob, "vencimento": prazo_ob,
-                            "periodicidade": "Eventual", "mes": m_ob, "ano": a_ob, "alerta": alerta_ob
-                        }).execute()
-                        st.success("Obrigação adicionada!")
-
-    # --- VISÃO 2: PORTAL DO CLIENTE (EMPRESA) ---
-    elif st.session_state.perfil == "cliente":
-        cli_res = supabase.table("clientes").select("*").eq("id", st.session_state.cliente_id_logado).execute()
-        if cli_res.data:
-            info_c = cli_res.data[0]
-            st.title(f"👤 Central de Atendimento - {info_c['nome']}")
-            
-            # ----------------------------------------------------
-            # DOCUMENTOS FIXOS EMPRESARIAIS (BALDE: documentos-fixos)
-            # ----------------------------------------------------
-            st.markdown("### 📌 Documentos da Empresa (Acesso Permanente)")
-            docs_fixos_res = supabase.table("documentos_fixos").select("*").eq("cliente_id", info_c["id"]).execute()
-            
-            if docs_fixos_res.data:
-                col_fixo_1, col_fixo_2 = st.columns(2)
-                for index, doc in enumerate(docs_fixos_res.data):
-                    col_alvo = col_fixo_1 if index % 2 == 0 else col_fixo_2
-                    with col_alvo:
-                        with st.container(border=True):
-                            st.write(f"📂 **{doc['tipo_documento']}**")
-                            st.caption(f"Arquivo: {doc['nome_arquivo']}")
-                            try:
-                                # Busca o link temporário apontando para o bucket correto
-                                url_temp = supabase.storage.from_("documentos-fixos").create_signed_url(doc["caminho_storage"], 60)
-                                st.markdown(f'<a href="{url_temp["signedUrl"]}" target="_blank"><button style="background-color:#3498db; color:white; border:none; padding:6px 12px; border-radius:4px; cursor:pointer; width:100%;">Visualizar / Baixar</button></a>', unsafe_allow_html=True)
-                            except:
-                                st.caption("⚠️ Erro ao gerar link seguro.")
-            else:
-                st.info("Nenhum documento institucional fixo anexado até o momento.")
-                
-            st.markdown("---")
-            
-            # SEÇÃO TRADICIONAL DAS GUIAS DO MÊS (BALDE: documentos-clientes)
-            st.markdown("### 📥 Impostos e Guias Mensais Recentes")
-            col_fc1, col_fc2 = st.columns(2)
-            with col_fc1: filtro_ano_c = st.selectbox("Filtrar Ano:", LISTA_ANOS, index=1)
-            with col_fc2: filtro_mes_c = st.selectbox("Filtrar Mês:", LISTA_MESES, index=datetime.now().month - 1)
-            
-            arquivos_res = supabase.table("arquivos_escritorio").select("*").eq("cliente_id", info_c["id"]).eq("ano", filtro_ano_c).eq("mes", filtro_mes_c).execute()
-            
-            if arquivos_res.data:
-                for arq in arquivos_res.data:
-                    col_arq, col_btn = st.columns([3, 1])
-                    with col_arq:
-                        st.markdown(f"📄 **{arq['nome_arquivo']}**")
-                        st.caption(f"Disponibilizado em: {arq['data_publicacao']}")
-                    with col_btn:
-                        try:
-                            url_temporaria = supabase.storage.from_("documentos-clientes").create_signed_url(arq["caminho_storage"], 60)
-                            st.markdown(f'<a href="{url_temporaria["signedUrl"]}" target="_blank"><button style="background-color:#2ecc71; color:white; border:none; padding:6px 12px; border-radius:4px; cursor:pointer;">⬇️ Baixar</button></a>', unsafe_allow_html=True)
-                        except:
-                            st.error("Erro no link.")
-            else:
-                st.warning("Nenhuma guia lançada para o período selecionado.")
+        if opcao == "Dashboard Geral":
+            render_dashboard()
+        elif opcao == "Documentos e Tarefas":
+            render_upload_documentos()
+        elif opcao == "Cadastrar Cliente":
+            render_cadastrar_cliente()
+        elif opcao == "Configurar Acessos":
+            render_configurar_acessos()
+        elif opcao == "Obrigações Customizadas":
+            render_obrigacoes_customizadas()
+    else:
+        st.sidebar.write(f"Conectado como: **CLIENTE**")
+        st.sidebar.markdown("---")
+        render_portal_cliente()
