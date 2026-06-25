@@ -656,7 +656,7 @@ else:
         st.session_state.logado = False
         st.session_state.perfil = None
         st.session_state.cliente_id_logado = None
-        st.experimental_rerun()
+        st.rerun()
 
     if st.session_state.perfil == "escritorio":
         opcao = st.sidebar.radio("Menu:", [
