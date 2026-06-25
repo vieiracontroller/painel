@@ -140,47 +140,108 @@ def render_dashboard():
     hoje = datetime.now()
     mes_atual = LISTA_MESES[hoje.month - 1]
     ano_atual = str(hoje.year)
-    df_tarefas_mes = extrapolar_tarefas_por_mes(df_tarefas, mes_atual, ano_atual)
 
-    total_clientes = len(df_clientes)
-    tarefas_pendentes = int(df_tarefas_mes[df_tarefas_mes["status"] == "Pendente"].shape[0]) if not df_tarefas_mes.empty else 0
-    tarefas_concluidas = int(df_tarefas_mes[df_tarefas_mes["status"] == "Concluído"].shape[0]) if not df_tarefas_mes.empty else 0
-    documentos_processados = len(df_documentos_fixos) + len(df_arquivos)
+    # --- FILTROS DINÂMICOS ---
+    f1, f2, f3, f4 = st.columns(4)
+
+    cliente_options = ["Todos os Clientes"] + (df_clientes['nome'].tolist() if not df_clientes.empty else [])
+    obrig_options = ["Todas as Obrigações"] + (sorted(df_tarefas['obrigacao'].dropna().unique().tolist()) if not df_tarefas.empty else [])
+
+    cliente_sel = f1.selectbox("Filtrar por Cliente:", cliente_options)
+    obrigacao_sel = f2.selectbox("Filtrar por Obrigação:", obrig_options)
+    mes_sel = f3.selectbox("Filtrar por Mês:", LISTA_MESES, index=LISTA_MESES.index(mes_atual))
+    ano_sel = f4.selectbox("Filtrar por Ano:", LISTA_ANOS, index=LISTA_ANOS.index(ano_atual) if ano_atual in LISTA_ANOS else 0)
+
+    # Prepare fused dataframe (tarefas + clientes)
+    if not df_tarefas.empty and not df_clientes.empty:
+        df_fused = df_tarefas.merge(df_clientes[["id", "nome"]], left_on="cliente_id", right_on="id", how="left")
+    else:
+        df_fused = pd.DataFrame()
+
+    # Apply filters
+    if not df_fused.empty:
+        df_filtered = df_fused[(df_fused['mes'] == mes_sel) & (df_fused['ano'] == ano_sel)].copy()
+        if cliente_sel != "Todos os Clientes":
+            df_filtered = df_filtered[df_filtered['nome'] == cliente_sel]
+        if obrigacao_sel != "Todas as Obrigações":
+            df_filtered = df_filtered[df_filtered['obrigacao'] == obrigacao_sel]
+    else:
+        df_filtered = pd.DataFrame()
+
+    # Métricas baseadas nos filtros
+    total_clientes = int(df_filtered['cliente_id'].nunique()) if not df_filtered.empty else 0
+    tarefas_pendentes = int(df_filtered[df_filtered['status'] == 'Pendente'].shape[0]) if not df_filtered.empty else 0
+    tarefas_concluidas = int(df_filtered[df_filtered['status'] == 'Concluído'].shape[0]) if not df_filtered.empty else 0
+
+    # Documentos processados: mensais filtrados + fixos (filtrados por cliente se especificado)
+    if not df_arquivos.empty:
+        df_arquivos_filtr = df_arquivos[(df_arquivos['mes'] == mes_sel) & (df_arquivos['ano'] == ano_sel)]
+        if cliente_sel != "Todos os Clientes":
+            cliente_id_sel = int(df_clientes[df_clientes['nome'] == cliente_sel]['id'].iloc[0]) if not df_clientes.empty else None
+            if cliente_id_sel is not None:
+                df_arquivos_filtr = df_arquivos_filtr[df_arquivos_filtr['cliente_id'] == cliente_id_sel]
+        count_mensais = len(df_arquivos_filtr)
+    else:
+        count_mensais = 0
+
+    if not df_documentos_fixos.empty:
+        if cliente_sel != "Todos os Clientes":
+            cliente_id_sel = int(df_clientes[df_clientes['nome'] == cliente_sel]['id'].iloc[0]) if not df_clientes.empty else None
+            if cliente_id_sel is not None:
+                count_fixos = len(df_documentos_fixos[df_documentos_fixos['cliente_id'] == cliente_id_sel])
+            else:
+                count_fixos = 0
+        else:
+            count_fixos = len(df_documentos_fixos)
+    else:
+        count_fixos = 0
+
+    documentos_processados = count_mensais + count_fixos
 
     col1, col2, col3 = st.columns(3)
-    col1.metric("Clientes ativos", total_clientes, delta=None)
-    col2.metric("Tarefas pendentes neste mês", tarefas_pendentes, delta=None)
-    col3.metric("Tarefas concluídas neste mês", tarefas_concluidas, delta=None)
+    col1.metric("Clientes (filtrados)", total_clientes, delta=None)
+    col2.metric("Tarefas pendentes", tarefas_pendentes, delta=None)
+    col3.metric("Tarefas concluídas", tarefas_concluidas, delta=None)
 
     col4, col5, col6 = st.columns(3)
     col4.metric("Documentos processados", documentos_processados, delta=None)
-    col5.metric("Mês atual", mes_atual, delta=None)
-    col6.metric("Ano", ano_atual, delta=None)
+    col5.metric("Mês", mes_sel, delta=None)
+    col6.metric("Ano", ano_sel, delta=None)
 
     st.markdown("---")
 
-    if not df_tarefas_mes.empty:
-        df_status = (
-            df_tarefas_mes["status"].fillna("Sem status")
-            .value_counts()
-            .reset_index()
-            .rename(columns={"index": "Status", "status": "Quantidade"})
-        )
-        fig_status = px.bar(df_status, x="Status", y="Quantidade", color="Status", title="Status das obrigações do mês", text="Quantidade")
-        fig_status.update_layout(showlegend=False, height=320)
-        st.plotly_chart(fig_status, use_container_width=True)
-
-        if not df_clientes.empty:
-            df_pendentes = df_tarefas_mes[df_tarefas_mes["status"] == "Pendente"].merge(df_clientes[["id", "nome"]], left_on="cliente_id", right_on="id", how="left")
-            if not df_pendentes.empty:
-                df_pendentes_por_cliente = (
-                    df_pendentes["nome"].value_counts().reset_index().rename(columns={"index": "Cliente", "nome": "Pendentes"})
-                )
-                fig_pendentes = px.bar(df_pendentes_por_cliente, x="Cliente", y="Pendentes", title="Tarefas pendentes por cliente", text="Pendentes")
-                fig_pendentes.update_layout(xaxis_tickangle=-45, height=320)
-                st.plotly_chart(fig_pendentes, use_container_width=True)
+    # --- GRÁFICOS (Plotly) ---
+    if df_filtered.empty:
+        st.info("Nenhuma obrigação encontrada para os filtros selecionados.")
     else:
-        st.info("Ainda não há tarefas registradas para o mês atual.")
+        g1, g2 = st.columns(2)
+
+        # Pie / Donut - status distribution
+        with g1:
+            status_counts = df_filtered['status'].fillna('Sem status').value_counts().reset_index()
+            status_counts.columns = ['Status', 'Quantidade']
+            color_map = {
+                'Concluído': '#2ecc71',
+                'Pendente': '#e67e22',
+                'Atrasado': '#e74c3c',
+                'Sem status': '#95a5a6'
+            }
+            fig_pie = px.pie(status_counts, names='Status', values='Quantidade', title='Status das Obrigações', hole=0.4)
+            # apply colors where possible
+            fig_pie.update_traces(marker=dict(colors=[color_map.get(s, '#95a5a6') for s in status_counts['Status']]))
+            st.plotly_chart(fig_pie, use_container_width=True)
+
+        # Bar chart - volume by cliente or by obrigação
+        with g2:
+            if cliente_sel == "Todos os Clientes":
+                df_group = df_filtered.groupby('nome').size().reset_index(name='Quantidade')
+                fig_bar = px.bar(df_group, x='nome', y='Quantidade', title='Obrigações por Cliente', text='Quantidade')
+                fig_bar.update_layout(xaxis_tickangle=-45, height=360)
+            else:
+                df_group = df_filtered.groupby('obrigacao').size().reset_index(name='Quantidade')
+                fig_bar = px.bar(df_group, x='obrigacao', y='Quantidade', title='Obrigações por Tipo', text='Quantidade')
+                fig_bar.update_layout(xaxis_tickangle=-45, height=360)
+            st.plotly_chart(fig_bar, use_container_width=True)
 
     st.markdown("---")
     st.markdown("### Últimas tarefas cadastradas")
