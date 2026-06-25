@@ -381,7 +381,7 @@ def render_cadastrar_cliente():
         st.session_state["usuario_email"] = ""
         st.session_state["usuario_senha"] = ""
 
-    with st.form("form_cliente_unificado"):
+    with st.form("form_cadastro_cliente", clear_on_submit=True):
         st.subheader("Dados da Empresa")
         nome = st.text_input("Razão Social / Nome Fantasia", key="empresa_nome")
         email_empresa = st.text_input("E-mail institucional", key="empresa_email")
@@ -445,18 +445,6 @@ def render_cadastrar_cliente():
                         }).execute()
 
                     st.success("Cliente e Usuário de Acesso criados com sucesso!")
-                    st.session_state["empresa_nome"] = ""
-                    st.session_state["empresa_cnpj"] = ""
-                    st.session_state["empresa_ie"] = ""
-                    st.session_state["empresa_email"] = ""
-                    st.session_state["empresa_telefone"] = ""
-                    st.session_state["empresa_regime"] = "Simples Nacional"
-                    st.session_state["empresa_socios"] = ""
-                    st.session_state["empresa_tem_folha"] = False
-                    st.session_state["usuario_nome"] = ""
-                    st.session_state["usuario_email"] = ""
-                    st.session_state["usuario_senha"] = ""
-                    st.experimental_rerun()
                 except Exception as e:
                     st.error(f"Erro ao salvar cadastro: {e}")
 
