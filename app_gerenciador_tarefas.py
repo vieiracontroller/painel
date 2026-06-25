@@ -3,7 +3,7 @@ import pandas as pd
 import plotly.express as px
 from datetime import datetime
 from supabase import create_client, Client
-from supabase.lib.client_options import ClientOptions
+from supabase.lib.client_options import SyncClientOptions
 
 # Configuração da página
 st.set_page_config(page_title="Gestão Vieira Controller", layout="wide")
@@ -28,7 +28,7 @@ def inicializar_supabase() -> Client:
         "apiKey": auth_key,
         "Authorization": f"Bearer {auth_key}"
     }
-    return create_client(url, supabase_key, options=ClientOptions(headers=headers))
+    return create_client(url, supabase_key, options=SyncClientOptions(headers=headers))
 
 try:
     supabase = inicializar_supabase()
