@@ -9,7 +9,6 @@ from supabase.lib.client_options import SyncClientOptions
 st.set_page_config(page_title="Gestão Vieira Controller", layout="wide")
 
 # --- CONEXÃO SEGURA COM SUPABASE ---
-@st.cache_resource
 def inicializar_supabase() -> Client:
     url = str(st.secrets["supabase"]["url"]).strip()
     public_key = str(st.secrets["supabase"].get("public_key", "")).strip().strip('"').strip("'")
