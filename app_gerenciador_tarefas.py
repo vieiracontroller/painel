@@ -71,6 +71,13 @@ OBRIGACOES_BASE = {
     ]
 }
 
+OBRIGACOES_PADRAO = [
+    {"obrigacao": "DAS - Simples Nacional", "prazo": "Até o dia 20", "periodicidade": "Mensal"},
+    {"obrigacao": "DCTFWeb", "prazo": "Até o último dia útil do mês subsequente", "periodicidade": "Mensal"},
+    {"obrigacao": "FGTS / SEFIP", "prazo": "Até o dia 7", "periodicidade": "Mensal"},
+    {"obrigacao": "Folha de Pagamento", "prazo": "Até o último dia útil do mês subsequente", "periodicidade": "Mensal"}
+]
+
 # --- CONTROLE DE SESSÃO / LOGIN ---
 if 'logado' not in st.session_state:
     st.session_state.logado = False
@@ -136,6 +143,42 @@ def render_dashboard():
     st.title("📊 Painel de Controle Vieira Controller")
     st.markdown("Bem-vindo(a) ao centro de monitoramento da contabilidade. Acompanhe clientes, tarefas e documentos em tempo real.")
 
+    hoje = datetime.now()
+    mes_atual = LISTA_MESES[hoje.month - 1]
+    ano_atual = str(hoje.year)
+
+    if st.button("⚙️ Gerar Obrigações do Mês Atual"):
+        clientes_ativos = supabase.table("clientes").select("*").eq("status_cadastro", "Ativo").execute().data or []
+
+        if not clientes_ativos:
+            st.warning("Nenhum cliente ativo encontrado para gerar obrigações.")
+        else:
+            ids_ativos = [c["id"] for c in clientes_ativos if c.get("id") is not None]
+            tarefas_existentes = supabase.table("tarefas").select("cliente_id,obrigacao,mes,ano").in_("cliente_id", ids_ativos).eq("mes", mes_atual).eq("ano", ano_atual).execute().data or []
+            existentes = {(t["cliente_id"], t["obrigacao"], t["mes"], t["ano"]) for t in tarefas_existentes}
+            inseridas = 0
+            for cliente in clientes_ativos:
+                cliente_id = cliente.get("id")
+                if cliente_id is None:
+                    continue
+                for obr in OBRIGACOES_PADRAO:
+                    key = (cliente_id, obr["obrigacao"], mes_atual, ano_atual)
+                    if key in existentes:
+                        continue
+                    supabase.table("tarefas").insert({
+                        "cliente_id": cliente_id,
+                        "obrigacao": obr["obrigacao"],
+                        "vencimento": obr["prazo"],
+                        "periodicidade": obr["periodicidade"],
+                        "mes": mes_atual,
+                        "ano": ano_atual,
+                        "alerta": "✅ Normal",
+                        "status": "Pendente"
+                    }).execute()
+                    inseridas += 1
+            st.success(f"{inseridas} obrigações padrão geradas para clientes ativos.")
+            st.rerun()
+
     clientes = carregar_clientes()
     tarefas = carregar_tarefas()
     documentos_fixos = carregar_documentos_fixos()
@@ -145,10 +188,6 @@ def render_dashboard():
     df_tarefas = df_from_data(tarefas)
     df_documentos_fixos = df_from_data(documentos_fixos)
     df_arquivos = df_from_data(arquivos)
-
-    hoje = datetime.now()
-    mes_atual = LISTA_MESES[hoje.month - 1]
-    ano_atual = str(hoje.year)
 
     # --- FILTROS DINÂMICOS ---
     f1, f2, f3, f4 = st.columns(4)
@@ -294,19 +333,34 @@ def render_dashboard():
 
         tarefas_pendentes = df_tarefas[df_tarefas["status"] == "Pendente"]
         if not tarefas_pendentes.empty:
-            tarefas_pendentes = tarefas_pendentes.merge(df_clientes[["id", "nome"]], left_on="cliente_id", right_on="id", how="left")
-            tarefas_pendentes["descricao_combo"] = tarefas_pendentes.apply(
-                lambda row: f"{row['nome']} - {row['obrigacao']} - {row['mes']}/{row['ano']}", axis=1
+            tarefas_pendentes = tarefas_pendentes.merge(
+                df_clientes[["id", "nome"]],
+                left_on="cliente_id",
+                right_on="id",
+                how="left",
+                suffixes=("", "_cliente")
             )
-            tarefa_options = tarefas_pendentes[["id", "descricao_combo"]].set_index("descricao_combo").to_dict()["id"]
+            tarefa_options = {}
+            if not tarefas_pendentes.empty:
+                for _, row in tarefas_pendentes.iterrows():
+                    cliente = row.get('Cliente', row.get('nome', ''))
+                    obrigacao = row.get('Obrigação', row.get('obrigacao', ''))
+                    mes = row.get('Mês', row.get('mes', ''))
+                    t_id = row.get('id', row.get('ID', None))
+                    if t_id is not None:
+                        label = f"{cliente} - {obrigacao} ({mes})"
+                        tarefa_options[label] = t_id
 
             st.subheader("⚙️ Gerenciar e Concluir Obrigações")
-            selected_tarefa = st.selectbox("Selecione a obrigação pendente:", list(tarefa_options.keys()))
-            if st.button("✅ Marcar como Concluída"):
-                tarefa_id = tarefa_options[selected_tarefa]
-                supabase.table("tarefas").update({"status": "Concluído"}).eq("id", int(tarefa_id)).execute()
-                st.success("Obrigação concluída com sucesso!")
-                st.rerun()
+            if tarefa_options:
+                selected_tarefa = st.selectbox("Selecione a obrigação pendente:", list(tarefa_options.keys()))
+                if st.button("✅ Marcar como Concluída"):
+                    tarefa_id = tarefa_options[selected_tarefa]
+                    supabase.table("tarefas").update({"status": "Concluído"}).eq("id", int(tarefa_id)).execute()
+                    st.success("Obrigação concluída com sucesso!")
+                    st.rerun()
+            else:
+                st.info("Não há obrigações pendentes encontradas com dados de ID válidos.")
         else:
             st.info("Não há obrigações pendentes para concluir no momento.")
     else:
@@ -436,7 +490,8 @@ def render_cadastrar_cliente():
                         "email": email_empresa,
                         "telefone": telefone,
                         "socios": socios,
-                        "tem_folha": tem_folha
+"tem_folha": tem_folha,
+                    "status_cadastro": "Ativo"
                     }).execute()
 
                     if not ins_res.data or len(ins_res.data) == 0:
@@ -548,7 +603,7 @@ def render_base_clientes():
     st.title("👥 Base de Clientes")
     st.markdown("Visualize a base de clientes, regimes tributários e credenciais de acesso. Atualize senhas de clientes diretamente daqui.")
 
-    acessos = supabase.table("usuarios_clientes").select("*, clientes(nome, regime)").execute().data or []
+    acessos = supabase.table("usuarios_clientes").select("*, clientes(nome, regime, status_cadastro)").execute().data or []
     if not acessos:
         st.info("Nenhum cliente com acesso cadastrado ainda.")
         return
@@ -557,9 +612,11 @@ def render_base_clientes():
     if not df_acessos.empty:
         df_acessos["empresa"] = df_acessos["clientes"].apply(lambda c: c.get("nome") if isinstance(c, dict) else "-")
         df_acessos["regime"] = df_acessos["clientes"].apply(lambda c: c.get("regime") if isinstance(c, dict) else "-")
-        df_exib = df_acessos[["empresa", "regime", "email", "senha"]].rename(columns={
+        df_acessos["status_cadastro"] = df_acessos["clientes"].apply(lambda c: c.get("status_cadastro", "Ativo") if isinstance(c, dict) else "Ativo")
+        df_exib = df_acessos[["empresa", "regime", "status_cadastro", "email", "senha"]].rename(columns={
             "empresa": "Nome da Empresa / Razão Social",
             "regime": "Regime Tributário",
+            "status_cadastro": "Status",
             "email": "E-mail de Acesso",
             "senha": "Senha Cadastrada"
         })
@@ -568,26 +625,29 @@ def render_base_clientes():
         st.info("Nenhum cliente com acesso para exibir.")
 
     st.markdown("---")
-    st.subheader("Atualizar Senha do Cliente")
+    st.subheader("Mudar Status do Cliente")
     clientes = carregar_clientes()
     if not clientes:
-        st.warning("Cadastre ao menos um cliente antes de atualizar senhas.")
+        st.warning("Cadastre ao menos um cliente antes de atualizar o status.")
         return
 
-    cliente_selecionado = st.selectbox("Selecione o Cliente:", [c["nome"] for c in clientes])
-    nova_senha = st.text_input("Nova Senha", type="password")
+    with st.form("form_status_cliente"):
+        cliente_selecionado = st.selectbox("Selecione o Cliente:", [c["nome"] for c in clientes])
+        novo_status = st.radio("Status de Cadastro:", ["Ativo", "Inativo"], index=0)
+        salvar_status = st.form_submit_button("Salvar Status")
 
-    if st.button("Atualizar Senha"):
-        if not nova_senha:
-            st.error("Informe a nova senha.")
-        else:
+        if salvar_status:
             cliente_id = next(c["id"] for c in clientes if c["nome"] == cliente_selecionado)
-            acesso_res = supabase.table("usuarios_clientes").select("*").eq("cliente_id", cliente_id).execute()
-            if not acesso_res.data:
-                st.error("Nenhum acesso encontrado para esse cliente.")
-            else:
-                supabase.table("usuarios_clientes").update({"senha": nova_senha}).eq("cliente_id", cliente_id).execute()
-                st.success("Senha atualizada com sucesso!")
+            supabase.table("clientes").update({"status_cadastro": novo_status}).eq("id", cliente_id).execute()
+            st.success(f"Status do cliente atualizado para {novo_status}.")
+            st.rerun()
+
+    if novo_status == "Inativo":
+        cliente_id = next(c["id"] for c in clientes if c["nome"] == cliente_selecionado)
+        if st.button("🚨 Excluir Tarefas Pendentes deste Cliente Inativo"):
+            supabase.table("tarefas").delete().eq("cliente_id", cliente_id).eq("status", "Pendente").execute()
+            st.success("Tarefas pendentes do cliente inativo excluídas com sucesso.")
+            st.rerun()
 
 
 def render_obrigacoes_customizadas():
