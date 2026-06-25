@@ -615,10 +615,10 @@ def render_base_clientes():
 
             if col_ligacao:
                 df_final = pd.merge(df_usuarios, df_clientes, left_on=col_ligacao, right_on='id', suffixes=('_user', '_empresa'))
-                if 'nome_empresa' in df_final.columns:
-                    df_final['empresa'] = df_final['nome_empresa']
-                elif 'nome' in df_final.columns:
+                if 'nome' in df_final.columns:
                     df_final['empresa'] = df_final['nome']
+                elif 'nome_empresa' in df_final.columns:
+                    df_final['empresa'] = df_final['nome_empresa']
                 else:
                     df_final['empresa'] = '-'
 
@@ -633,9 +633,9 @@ def render_base_clientes():
                 df_ativos = df_final[df_final['status_cadastro'] == 'Ativo']
                 df_inativos = df_final[df_final['status_cadastro'] == 'Inativo']
 
-                display_cols = [c for c in ['id_empresa', 'nome_empresa', 'cnpj', 'regime', 'email_user', 'status_cadastro'] if c in df_final.columns]
-                if 'nome_empresa' in display_cols:
-                    display_cols = [c if c != 'nome_empresa' else 'nome_empresa' for c in display_cols]
+                display_cols = [c for c in ['id_empresa', 'nome', 'cnpj', 'regime', 'email_user', 'status_cadastro'] if c in df_final.columns]
+                if 'nome' not in display_cols and 'nome_empresa' in df_final.columns:
+                    display_cols.insert(1, 'nome_empresa')
 
                 st.subheader('🟢 Clientes Ativos')
                 st.dataframe(df_ativos[display_cols], use_container_width=True)
@@ -654,7 +654,7 @@ def render_base_clientes():
     st.subheader("Mudar Status do Cliente")
 
     if 'df_final' in locals() and not df_final.empty:
-        lista_empresas = df_final['empresa'].unique().tolist()
+        lista_empresas = df_final['empresa'].astype(str).unique().tolist()
     else:
         clientes = carregar_clientes()
         lista_empresas = [c['nome'] for c in clientes]
@@ -668,19 +668,33 @@ def render_base_clientes():
         novo_status = st.radio('Status de Cadastro:', ['Ativo', 'Inativo'], index=0)
         salvar_status = st.form_submit_button('Salvar Status')
 
-        if salvar_status:
-            if 'df_final' in locals() and not df_final.empty:
-                id_cliente_correto = int(df_final[df_final['empresa'] == empresa_selecionada]['id_empresa'].values[0])
-            else:
+        if 'df_final' in locals() and not df_final.empty:
+            matching = df_final[df_final['empresa'] == empresa_selecionada]
+            if matching.empty:
+                st.error('Cliente selecionado não encontrado na base consolidada.')
+                st.stop()
+            try:
+                id_cliente_correto = matching['id_empresa'].values[0].item()
+                id_cliente_correto = int(id_cliente_correto)
+            except Exception as e:
+                st.error(f'Erro ao identificar o ID da empresa: {e}')
+                id_cliente_correto = None
+        else:
+            try:
                 id_cliente_correto = int(next(c['id'] for c in clientes if c['nome'] == empresa_selecionada))
+            except Exception as e:
+                st.error(f'Erro ao identificar o ID da empresa: {e}')
+                id_cliente_correto = None
 
-            supabase.table('clientes').update({'status_cadastro': novo_status}).eq('id', id_cliente_correto).execute()
-            if novo_status == 'Inativo':
-                supabase.table('tarefas').delete().eq('cliente_id', id_cliente_correto).eq('status', 'Pendente').execute()
-                st.success('Status atualizado! Obrigações pendentes removidas caso inativado.')
-            else:
-                st.success('Status atualizado!')
-            st.rerun()
+        if id_cliente_correto and st.button('Salvar Status'):
+            try:
+                supabase.table('clientes').update({'status_cadastro': novo_status}).eq('id', id_cliente_correto).execute()
+                if novo_status == 'Inativo':
+                    supabase.table('tarefas').delete().eq('cliente_id', id_cliente_correto).eq('status', 'Pendente').execute()
+                st.success('Status atualizado com sucesso e obrigações limpas!')
+                st.rerun()
+            except Exception as error:
+                st.error(f'Erro técnico ao comunicar com o Supabase: {error}')
 
 
 def render_obrigacoes_customizadas():
