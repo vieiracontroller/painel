@@ -670,9 +670,9 @@ def render_base_clientes():
 
         if salvar_status:
             if 'df_final' in locals() and not df_final.empty:
-                id_cliente_correto = df_final[df_final['empresa'] == empresa_selecionada]['id_empresa'].values[0]
+                id_cliente_correto = int(df_final[df_final['empresa'] == empresa_selecionada]['id_empresa'].values[0])
             else:
-                id_cliente_correto = next(c['id'] for c in clientes if c['nome'] == empresa_selecionada)
+                id_cliente_correto = int(next(c['id'] for c in clientes if c['nome'] == empresa_selecionada))
 
             supabase.table('clientes').update({'status_cadastro': novo_status}).eq('id', id_cliente_correto).execute()
             if novo_status == 'Inativo':
