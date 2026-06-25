@@ -275,8 +275,11 @@ def render_upload_documentos():
             st.subheader("Upload de Documentos Mensais")
             with st.form("form_doc_mensal"):
                 cliente_sel = st.selectbox("Selecione o Cliente:", [c["nome"] for c in lista_clientes])
-                mes_comp = st.selectbox("Mês de Competência:", LISTA_MESES, index=datetime.now().month - 1)
-                ano_comp = st.selectbox("Ano:", LISTA_ANOS, index=1)
+                col1, col2 = st.columns(2)
+                with col1:
+                    mes_comp = st.selectbox("Mês de Competência:", LISTA_MESES, index=datetime.now().month - 1)
+                with col2:
+                    ano_comp = st.selectbox("Ano de Competência:", LISTA_ANOS, index=1)
                 arquivo_mensal = st.file_uploader("Arquivo (PDF/XML/XLSX):", type=["pdf", "xml", "zip", "xlsx"])
 
                 if st.form_submit_button("Salvar Documento Mensal"):
@@ -305,16 +308,16 @@ def render_upload_documentos():
             st.subheader("Upload de Documentos Fixos / Institucionais")
             with st.form("form_doc_fixo"):
                 cliente_selecionado = st.selectbox("Selecione o Cliente:", [c["nome"] for c in lista_clientes])
-                tipo_doc = st.selectbox("Tipo de Documento:", TIPOS_DOCS_FIXOS)
+                descricao_doc = st.text_input("Descrição do Documento Fixo", help="Ex: Contrato Social, Cartão CNPJ, Alvará, Inscrição Estadual")
                 arquivo_upload = st.file_uploader("Selecione o arquivo (PDF/JPG/PNG):", type=["pdf", "jpg", "png"])
 
                 if st.form_submit_button("Salvar Documento Institucional"):
-                    if not arquivo_upload:
-                        st.error("Anexe um arquivo antes de salvar.")
+                    if not descricao_doc or not arquivo_upload:
+                        st.error("Por favor informe a descrição e anexe o arquivo.")
                     else:
                         id_cliente = next(c["id"] for c in lista_clientes if c["nome"] == cliente_selecionado)
                         nome_limpo = f"{id_cliente}_{int(datetime.now().timestamp())}_{arquivo_upload.name}"
-                        caminho_storage = f"arquivos/{nome_limpo}"
+                        caminho_storage = f"documentos/{nome_limpo}"
 
                         supabase.storage.from_("documentos-fixos").upload(
                             path=caminho_storage,
@@ -323,19 +326,19 @@ def render_upload_documentos():
                         )
                         supabase.table("documentos_fixos").insert({
                             "cliente_id": id_cliente,
-                            "tipo_documento": tipo_doc,
+                            "tipo_documento": descricao_doc,
                             "nome_arquivo": arquivo_upload.name,
                             "caminho_storage": caminho_storage
                         }).execute()
-                        st.success(f"Documento institucional '{tipo_doc}' enviado com sucesso.")
+                        st.success(f"Documento institucional '{descricao_doc}' enviado com sucesso.")
 
             st.markdown("---")
             st.markdown("### Documentos institucionais já cadastrados")
             documentos_fixos = carregar_documentos_fixos()
             if documentos_fixos:
-                for doc in documentos_fixos:
-                    cliente_nome = doc.get("clientes", {}).get("nome", "-") if doc.get("clientes") else "-"
-                    st.write(f"**{doc['nome_arquivo']}** — Cliente: {cliente_nome} — Tipo: {doc['tipo_documento']}")
+                df_fixos = pd.DataFrame(documentos_fixos)
+                if not df_fixos.empty:
+                    st.dataframe(df_fixos[["cliente_id", "tipo_documento", "nome_arquivo"]].rename(columns={"cliente_id": "Cliente ID", "tipo_documento": "Descrição", "nome_arquivo": "Arquivo"}), use_container_width=True)
             else:
                 st.info("Nenhum documento institucional cadastrado ainda.")
 
@@ -495,7 +498,7 @@ def render_cadastrar_cliente():
 
 def render_gerenciar_obrigacoes():
     st.title("🗂️ Gerenciar Obrigações (Contador)")
-    st.markdown("Cadastre obrigações para clientes. Essas entradas serão gravadas na tabela `tarefas`.")
+    st.markdown("Use este formulário para cadastrar as obrigações de cada cliente diretamente na tabela de tarefas.")
 
     clientes = carregar_clientes()
     if not clientes:
@@ -504,29 +507,32 @@ def render_gerenciar_obrigacoes():
 
     with st.form("form_gerenciar_obrigacoes"):
         cliente_selecionado = st.selectbox("Selecione o Cliente:", [c["nome"] for c in clientes])
-        nome_ob = st.text_input("Nome da Obrigação (ex: DAS, GIA, Folha de Pagamento)")
-        vencimento = st.text_input("Data de Vencimento (por extenso)")
-        status_inicial = st.selectbox("Status Inicial:", ["Pendente", "Concluído"], index=0)
+        nome_ob = st.text_input("Nome da Obrigação (ex: DAS - Simples Nacional, DCTFWeb, FGTS / SEFIP, Folha de Pagamento)")
+        col1, col2 = st.columns(2)
+        with col1:
+            mes_comp = st.selectbox("Mês de Competência:", LISTA_MESES, index=datetime.now().month - 1)
+        with col2:
+            ano_comp = st.selectbox("Ano de Competência:", LISTA_ANOS, index=1)
+        vencimento = st.date_input("Data de Vencimento")
         periodicidade = st.selectbox("Periodicidade:", ["Mensal", "Trimestral", "Anual", "Eventual"], index=0)
-        mes_padrao = st.selectbox("Mês (opcional)", [""] + LISTA_MESES, index=0)
-        ano_padrao = st.selectbox("Ano (opcional)", [""] + LISTA_ANOS, index=0)
 
         if st.form_submit_button("Cadastrar Obrigação"):
-            if not nome_ob or not vencimento:
-                st.error("Preencha o nome da obrigação e a data de vencimento.")
+            if not nome_ob:
+                st.error("Preencha o nome da obrigação.")
             else:
                 cliente_id = next(c["id"] for c in clientes if c["nome"] == cliente_selecionado)
                 supabase.table("tarefas").insert({
                     "cliente_id": cliente_id,
                     "obrigacao": nome_ob,
-                    "vencimento": vencimento,
+                    "vencimento": vencimento.strftime("%Y-%m-%d"),
                     "periodicidade": periodicidade,
-                    "mes": mes_padrao if mes_padrao else None,
-                    "ano": ano_padrao if ano_padrao else None,
+                    "mes": mes_comp,
+                    "ano": ano_comp,
                     "alerta": "✅ Normal",
-                    "status": status_inicial
+                    "status": "Pendente"
                 }).execute()
                 st.success("Obrigação cadastrada com sucesso.")
+
 
 def render_configurar_acessos():
     st.title("🔑 Gerenciamento de Acessos")
@@ -621,14 +627,18 @@ def render_portal_cliente():
         docs_fixos = supabase.table("documentos_fixos").select("*").eq("cliente_id", cliente["id"]).execute().data or []
         if docs_fixos:
             df_fixos = pd.DataFrame(docs_fixos)
-            # show simple table with download links
-            for doc in docs_fixos:
-                st.write(f"**{doc['tipo_documento']}** — {doc['nome_arquivo']}")
-                try:
-                    assinatura = supabase.storage.from_("documentos-fixos").create_signed_url(doc["caminho_storage"], 60)
-                    st.markdown(f"<a href=\"{assinatura['signedUrl']}\" target=\"_blank\">Abrir / Baixar</a>", unsafe_allow_html=True)
-                except Exception:
-                    st.caption("Erro ao gerar link seguro.")
+            if not df_fixos.empty:
+                st.dataframe(
+                    df_fixos[["tipo_documento", "nome_arquivo"]].rename(columns={"tipo_documento": "Descrição", "nome_arquivo": "Arquivo"}),
+                    use_container_width=True
+                )
+                st.markdown("---")
+                for doc in docs_fixos:
+                    try:
+                        assinatura = supabase.storage.from_("documentos-fixos").create_signed_url(doc["caminho_storage"], 60)
+                        st.markdown(f"- **{doc['tipo_documento']}** — {doc['nome_arquivo']} — <a href=\"{assinatura['signedUrl']}\" target=\"_blank\">Abrir / Baixar</a>", unsafe_allow_html=True)
+                    except Exception:
+                        st.markdown(f"- **{doc['tipo_documento']}** — {doc['nome_arquivo']} — Erro ao gerar link")
         else:
             st.info("Nenhum documento institucional anexado ainda.")
 
@@ -647,17 +657,19 @@ def render_portal_cliente():
         arquivos = query.execute().data or []
 
         if arquivos:
-            for arq in arquivos:
-                col_arq, col_btn = st.columns([3, 1])
-                with col_arq:
-                    st.markdown(f"📄 **{arq['nome_arquivo']}**")
-                    st.caption(f"Disponibilizado em: {arq.get('data_publicacao', '-')}")
-                with col_btn:
+            df_arquivos = pd.DataFrame(arquivos)
+            if not df_arquivos.empty:
+                st.dataframe(
+                    df_arquivos[["ano", "mes", "nome_arquivo", "data_publicacao"]].rename(columns={"ano": "Ano", "mes": "Mês", "nome_arquivo": "Arquivo", "data_publicacao": "Disponibilizado em"}),
+                    use_container_width=True
+                )
+                st.markdown("---")
+                for arq in arquivos:
                     try:
                         assinatura = supabase.storage.from_("documentos-clientes").create_signed_url(arq["caminho_storage"], 60)
-                        st.markdown(f"<a href=\"{assinatura['signedUrl']}\" target=\"_blank\">⬇️ Baixar</a>", unsafe_allow_html=True)
+                        st.markdown(f"- **{arq['nome_arquivo']}** ({arq['mes']}/{arq['ano']}) — <a href=\"{assinatura['signedUrl']}\" target=\"_blank\">Baixar</a>", unsafe_allow_html=True)
                     except Exception:
-                        st.error("Erro ao gerar link de download.")
+                        st.markdown(f"- **{arq['nome_arquivo']}** ({arq['mes']}/{arq['ano']}) — Erro ao gerar link")
         else:
             st.warning("Nenhum documento mensal disponível para o período selecionado.")
 
