@@ -603,26 +603,26 @@ def render_base_clientes():
     st.title("👥 Base de Clientes")
     st.markdown("Visualize a base de clientes, regimes tributários e credenciais de acesso. Atualize senhas de clientes diretamente daqui.")
 
-    acessos = supabase.table("usuarios_clientes").select("*, clientes(nome, regime, status_cadastro)").execute().data or []
-    if not acessos:
-        st.info("Nenhum cliente com acesso cadastrado ainda.")
-        return
+    try:
+        res_usuarios = supabase.table("usuarios_clientes").select("*").execute()
+        df_usuarios = pd.DataFrame(res_usuarios.data or [])
 
-    df_acessos = pd.DataFrame(acessos)
-    if not df_acessos.empty:
-        df_acessos["empresa"] = df_acessos["clientes"].apply(lambda c: c.get("nome") if isinstance(c, dict) else "-")
-        df_acessos["regime"] = df_acessos["clientes"].apply(lambda c: c.get("regime") if isinstance(c, dict) else "-")
-        df_acessos["status_cadastro"] = df_acessos["clientes"].apply(lambda c: c.get("status_cadastro", "Ativo") if isinstance(c, dict) else "Ativo")
-        df_exib = df_acessos[["empresa", "regime", "status_cadastro", "email", "senha"]].rename(columns={
-            "empresa": "Nome da Empresa / Razão Social",
-            "regime": "Regime Tributário",
-            "status_cadastro": "Status",
-            "email": "E-mail de Acesso",
-            "senha": "Senha Cadastrada"
-        })
-        st.dataframe(df_exib, use_container_width=True)
-    else:
-        st.info("Nenhum cliente com acesso para exibir.")
+        res_clientes = supabase.table("clientes").select("*").execute()
+        df_clientes = pd.DataFrame(res_clientes.data or [])
+
+        if not df_usuarios.empty and not df_clientes.empty:
+            col_ligacao = 'cliente_id' if 'cliente_id' in df_usuarios.columns else 'id_cliente' if 'id_cliente' in df_usuarios.columns else None
+
+            if col_ligacao:
+                df_final = pd.merge(df_usuarios, df_clientes, left_on=col_ligacao, right_on='id', suffixes=('_user', '_empresa'))
+                st.dataframe(df_final)
+            else:
+                st.warning("Coluna de vínculo entre tabelas não encontrada automaticamente. Exibindo dados brutos:")
+                st.dataframe(df_usuarios)
+        else:
+            st.info("Nenhum registro encontrado para realizar a listagem.")
+    except Exception as e:
+        st.error(f"Erro ao processar tabelas: {e}")
 
     st.markdown("---")
     st.subheader("Mudar Status do Cliente")
