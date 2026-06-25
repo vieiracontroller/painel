@@ -42,6 +42,15 @@ TIPOS_DOCS_FIXOS = [
     "Senha de Acessos / Códigos",
     "Outros Documentos Fixos"
 ]
+
+PALETA_AZUL = {
+    "primary": "#0052cc",
+    "secondary": "#3b82f6",
+    "muted": "#cfe3ff",
+    "text": "#102a4b",
+    "background": "#ffffff",
+    "border": "#c8d9f0"
+}
 OBRIGACOES_BASE = {
     "Simples Nacional": [
         {"obrigacao": "DAS", "prazo": "Até o dia 20", "periodicidade": "Mensal"},
@@ -221,26 +230,58 @@ def render_dashboard():
             status_counts = df_filtered['status'].fillna('Sem status').value_counts().reset_index()
             status_counts.columns = ['Status', 'Quantidade']
             color_map = {
-                'Concluído': '#2ecc71',
-                'Pendente': '#e67e22',
-                'Atrasado': '#e74c3c',
-                'Sem status': '#95a5a6'
+                'Concluído': PALETA_AZUL['primary'],
+                'Pendente': PALETA_AZUL['secondary'],
+                'Atrasado': '#003a7a',
+                'Sem status': PALETA_AZUL['muted']
             }
-            fig_pie = px.pie(status_counts, names='Status', values='Quantidade', title='Status das Obrigações', hole=0.4)
-            # apply colors where possible
-            fig_pie.update_traces(marker=dict(colors=[color_map.get(s, '#95a5a6') for s in status_counts['Status']]))
+            fig_pie = px.pie(
+                status_counts,
+                names='Status',
+                values='Quantidade',
+                title='Status das Obrigações',
+                hole=0.4,
+                color_discrete_sequence=[color_map.get(s, PALETA_AZUL['muted']) for s in status_counts['Status']]
+            )
+            fig_pie.update_layout(
+                plot_bgcolor=PALETA_AZUL['background'],
+                paper_bgcolor=PALETA_AZUL['background'],
+                font_color=PALETA_AZUL['text'],
+                title_font_color=PALETA_AZUL['primary'],
+                legend_title_font_color=PALETA_AZUL['primary']
+            )
             st.plotly_chart(fig_pie, use_container_width=True)
 
-        # Bar chart - volume by cliente or by obrigação
+        # Bar chart - volume by cliente ou por obrigação
         with g2:
             if cliente_sel == "Todos os Clientes":
                 df_group = df_filtered.groupby('nome').size().reset_index(name='Quantidade')
-                fig_bar = px.bar(df_group, x='nome', y='Quantidade', title='Obrigações por Cliente', text='Quantidade')
-                fig_bar.update_layout(xaxis_tickangle=-45, height=360)
+                fig_bar = px.bar(
+                    df_group,
+                    x='nome',
+                    y='Quantidade',
+                    title='Obrigações por Cliente',
+                    text='Quantidade',
+                    color_discrete_sequence=[PALETA_AZUL['primary'], PALETA_AZUL['secondary']]
+                )
             else:
                 df_group = df_filtered.groupby('obrigacao').size().reset_index(name='Quantidade')
-                fig_bar = px.bar(df_group, x='obrigacao', y='Quantidade', title='Obrigações por Tipo', text='Quantidade')
-                fig_bar.update_layout(xaxis_tickangle=-45, height=360)
+                fig_bar = px.bar(
+                    df_group,
+                    x='obrigacao',
+                    y='Quantidade',
+                    title='Obrigações por Tipo',
+                    text='Quantidade',
+                    color_discrete_sequence=[PALETA_AZUL['primary'], PALETA_AZUL['secondary']]
+                )
+            fig_bar.update_layout(
+                xaxis_tickangle=-45,
+                height=360,
+                plot_bgcolor=PALETA_AZUL['background'],
+                paper_bgcolor=PALETA_AZUL['background'],
+                font_color=PALETA_AZUL['text'],
+                title_font_color=PALETA_AZUL['primary']
+            )
             st.plotly_chart(fig_bar, use_container_width=True)
 
     st.markdown("---")

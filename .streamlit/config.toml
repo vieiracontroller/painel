@@ -1,6 +1,10 @@
 [theme]
 primaryColor = "#0052cc"
 backgroundColor = "#ffffff"
-secondaryBackgroundColor = "#f4f6f9"
-textColor = "#1e293b"
+secondaryBackgroundColor = "#e8f0ff"
+textColor = "#102a4b"
 font = "sans serif"
+
+[theme.borders]
+color = "#c8d9f0"
+radius = 8
