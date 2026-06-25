@@ -20,22 +20,11 @@ def inicializar_supabase() -> Client:
         raise ValueError("secret_key inválido: deve começar com sb_secret_.")
 
     if secret_key:
-        supabase_key = secret_key
-        headers = {
-            "apikey": secret_key,
-            "apiKey": secret_key,
-            "Authorization": f"Bearer {secret_key}"
-        }
-    elif public_key:
-        supabase_key = public_key
-        headers = {
-            "apikey": public_key,
-            "apiKey": public_key
-        }
-    else:
-        raise ValueError("Nenhuma chave Supabase foi configurada. Adicione public_key e/ou secret_key nos secrets.")
+        return create_client(url, secret_key)
+    if public_key:
+        return create_client(url, public_key)
 
-    return create_client(url, supabase_key, options=SyncClientOptions(headers=headers))
+    raise ValueError("Nenhuma chave Supabase foi configurada. Adicione public_key e/ou secret_key nos secrets.")
 
 try:
     supabase = inicializar_supabase()
