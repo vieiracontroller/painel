@@ -12,22 +12,42 @@ st.set_page_config(page_title="Gestão Vieira Controller", layout="wide")
 @st.cache_resource
 def inicializar_supabase() -> Client:
     url = str(st.secrets["supabase"]["url"]).strip()
-    raw_key = str(st.secrets["supabase"]["key"]).strip().strip('"').strip("'")
-    public_key = str(
-        st.secrets["supabase"].get("public_key", st.secrets["supabase"].get("anon_key", raw_key))
-    ).strip().strip('"').strip("'")
-    secret_key = str(
-        st.secrets["supabase"].get("secret_key", st.secrets["supabase"].get("service_role_key", raw_key))
-    ).strip().strip('"').strip("'")
 
-    supabase_key = secret_key if secret_key.startswith("sb_secret_") else public_key
-    auth_key = secret_key if secret_key.startswith("sb_secret_") else supabase_key
+    def get_secret(name: str) -> str:
+        try:
+            return str(st.secrets["supabase"].get(name, ""))
+        except Exception:
+            try:
+                return str(st.secrets["supabase"][name])
+            except Exception:
+                return ""
+
+    public_key = get_secret("public_key")
+    secret_key = get_secret("secret_key")
+
+    if not public_key and secret_key.startswith("sb_publicable_"):
+        public_key = secret_key
+    if not secret_key and public_key.startswith("sb_secret_"):
+        secret_key = public_key
+
+    if public_key and secret_key:
+        supabase_key = public_key
+        auth_key = secret_key
+    elif secret_key:
+        supabase_key = secret_key
+        auth_key = secret_key
+    elif public_key:
+        supabase_key = public_key
+        auth_key = public_key
+    else:
+        raise ValueError("Nenhuma chave Supabase foi configurada. Adicione public_key e/ou secret_key nos secrets.")
 
     headers = {
-        "apikey": auth_key,
-        "apiKey": auth_key,
-        "Authorization": f"Bearer {auth_key}"
+        "apikey": supabase_key,
+        "apiKey": supabase_key,
     }
+    headers["Authorization"] = f"Bearer {auth_key}"
+
     return create_client(url, supabase_key, options=SyncClientOptions(headers=headers))
 
 try:
