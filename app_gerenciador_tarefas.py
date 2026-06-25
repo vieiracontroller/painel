@@ -291,6 +291,24 @@ def render_dashboard():
         df_exibicao = df_exibicao[["nome", "obrigacao", "periodicidade", "mes", "ano", "vencimento", "status"]]
         df_exibicao.columns = ["Cliente", "Obrigação", "Periodicidade", "Mês", "Ano", "Prazo", "Status"]
         st.dataframe(df_exibicao.sort_values(by=["Ano", "Mês"], ascending=False).head(10), use_container_width=True)
+
+        tarefas_pendentes = df_tarefas[df_tarefas["status"] == "Pendente"]
+        if not tarefas_pendentes.empty:
+            tarefas_pendentes = tarefas_pendentes.merge(df_clientes[["id", "nome"]], left_on="cliente_id", right_on="id", how="left")
+            tarefas_pendentes["descricao_combo"] = tarefas_pendentes.apply(
+                lambda row: f"{row['nome']} - {row['obrigacao']} - {row['mes']}/{row['ano']}", axis=1
+            )
+            tarefa_options = tarefas_pendentes[["id", "descricao_combo"]].set_index("descricao_combo").to_dict()["id"]
+
+            st.subheader("⚙️ Gerenciar e Concluir Obrigações")
+            selected_tarefa = st.selectbox("Selecione a obrigação pendente:", list(tarefa_options.keys()))
+            if st.button("✅ Marcar como Concluída"):
+                tarefa_id = tarefa_options[selected_tarefa]
+                supabase.table("tarefas").update({"status": "Concluído"}).eq("id", int(tarefa_id)).execute()
+                st.success("Obrigação concluída com sucesso!")
+                st.rerun()
+        else:
+            st.info("Não há obrigações pendentes para concluir no momento.")
     else:
         st.info("Cadastre um cliente e suas obrigações para começar a preencher o painel.")
 
