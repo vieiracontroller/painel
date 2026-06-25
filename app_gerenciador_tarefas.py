@@ -3,6 +3,7 @@ import pandas as pd
 import plotly.express as px
 from datetime import datetime
 from supabase import create_client, Client
+from supabase.lib.client_options import ClientOptions
 
 # Configuração da página
 st.set_page_config(page_title="Gestão Vieira Controller", layout="wide")
@@ -11,43 +12,28 @@ st.set_page_config(page_title="Gestão Vieira Controller", layout="wide")
 @st.cache_resource
 def inicializar_supabase() -> Client:
     url = str(st.secrets["supabase"]["url"]).strip()
-    key = str(st.secrets["supabase"]["key"]).strip()
-    return create_client(url, key)
-    
-    # Injeta os cabeçalhos necessários para o mapeamento da chave sb_secret
+    raw_key = str(st.secrets["supabase"]["key"]).strip().strip('"').strip("'")
+    public_key = str(
+        st.secrets["supabase"].get("public_key", st.secrets["supabase"].get("anon_key", raw_key))
+    ).strip().strip('"').strip("'")
+    secret_key = str(
+        st.secrets["supabase"].get("secret_key", st.secrets["supabase"].get("service_role_key", raw_key))
+    ).strip().strip('"').strip("'")
+
+    supabase_key = secret_key if secret_key.startswith("sb_secret_") else public_key
+    auth_key = secret_key if secret_key.startswith("sb_secret_") else supabase_key
+
     headers = {
-        "apikey": key_secret,
-        "Authorization": f"Bearer {key_secret}"
+        "apikey": auth_key,
+        "apiKey": auth_key,
+        "Authorization": f"Bearer {auth_key}"
     }
-    
-    # Inicializa o cliente mapeando a chave pública e a secreta simultaneamente
-    return create_client(url_limpa, key_public, options={"headers": headers})
-    
-    # Se você também adicionou a chave pública nos Secrets, capturamos ela aqui.
-    # Caso contrário, usamos a secret como fallback para montar a requisição base.
-    key_public = str(st.secrets["supabase"].get("public_key", key_secret)).strip().strip('"').strip("'")
-    
-    # Monta os cabeçalhos forçando o privilégio máximo com a chave secreta
-    headers = {
-        "apikey": key_secret,
-        "Authorization": f"Bearer {key_secret}"
-    }
-    
-    # Passa a chave pública no parâmetro padrão e a chave secreta nos cabeçalhos de controle
-    return create_client(url_limpa, key_public, options={"headers": headers})
-    
-    # Cabeçalhos explícitos para aceitar chaves do tipo sb_secret
-    headers = {
-        "apikey": key_limpa,
-        "Authorization": f"Bearer {key_limpa}"
-    }
-    
-    return create_client(url_limpa, key_limpa, options={"headers": headers})
+    return create_client(url, supabase_key, options=ClientOptions(headers=headers))
 
 try:
     supabase = inicializar_supabase()
 except Exception as e:
-    st.error("Erro ao conectar ao Banco de Dados. Verifique os Secrets no Streamlit Cloud.")
+    st.error(f"Erro real: {e}")
     st.stop()
 
 # --- CONFIGURAÇÕES DE ENUMERADORES ---
@@ -124,8 +110,12 @@ else:
             "Gerenciar Obrigações Customizadas"
         ])
         
-        clientes_res = supabase.table("clientes").select("*").order("nome").execute()
-        lista_clientes_db = clientes_res.data if clientes_res.data else []
+        try:
+            clientes_res = supabase.table("clientes").select("*").order("nome").execute()
+            lista_clientes_db = clientes_res.data if clientes_res.data else []
+        except Exception as e:
+            st.error(f"Erro de conexão Supabase: {e}")
+            st.stop()
 
         if menu == "Dashboard Geral":
             st.title("📊 Painel de Controle de Obrigações Contábeis")
