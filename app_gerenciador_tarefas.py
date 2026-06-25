@@ -429,8 +429,7 @@ def render_cadastrar_cliente():
                         "cliente_id": cliente_id,
                         "email": usuario_email,
                         "senha": usuario_senha,
-                        "perfil": "cliente",
-                        "nome": usuario_nome
+                        "perfil": "cliente"
                     }).execute()
 
                     for ob in OBRIGACOES_BASE[regime]:
