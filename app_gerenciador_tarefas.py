@@ -19,14 +19,7 @@ def inicializar_supabase() -> Client:
     if secret_key and not secret_key.startswith("sb_secret_"):
         raise ValueError("secret_key inválido: deve começar com sb_secret_.")
 
-    if public_key and secret_key:
-        supabase_key = public_key
-        headers = {
-            "apikey": public_key,
-            "apiKey": public_key,
-            "Authorization": f"Bearer {secret_key}"
-        }
-    elif secret_key:
+    if secret_key:
         supabase_key = secret_key
         headers = {
             "apikey": secret_key,
