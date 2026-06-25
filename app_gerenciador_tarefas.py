@@ -296,147 +296,89 @@ def render_dashboard():
 
 
 def render_upload_documentos():
-    st.title("📌 Upload de Documentos e Conclusão de Atividades")
-    st.markdown("Use este espaço para enviar documentos fixos e concluir tarefas diretamente no banco.")
+    st.title("📌 Upload de Documentos")
+    st.markdown("Área de envio de documentos para o escritório. Escolha o tipo de envio antes de subir o arquivo.")
 
     clientes = carregar_clientes()
-    tarefas = carregar_tarefas()
-    lista_clientes = clientes
-
-    if not lista_clientes:
-        st.warning("Cadastre ao menos um cliente antes de usar os uploads e tarefas.")
+    if not clientes:
+        st.warning("Cadastre ao menos um cliente antes de usar o upload de documentos.")
         return
 
-    tab_docs, tab_tarefas = st.tabs(["Documentos", "Tarefas Pendentes"])
+    tipos_envio = ["Documento Mensal (Imposto/Guia)", "Documento Fixo (Institucional)"]
+    tipo_envio = st.selectbox("Tipo de Envio:", tipos_envio)
 
-    with tab_docs:
-        sub_tab_mensal, sub_tab_fixos = st.tabs(["Documentos Mensais", "Documentos Fixos"])
+    with st.form("form_envio_documento"):
+        cliente_selecionado = st.selectbox("Selecione o Cliente:", [c["nome"] for c in clientes])
+        id_cliente = next(c["id"] for c in clientes if c["nome"] == cliente_selecionado)
 
-        with sub_tab_mensal:
-            st.subheader("Upload de Documentos Mensais")
-            with st.form("form_doc_mensal"):
-                cliente_sel = st.selectbox("Selecione o Cliente:", [c["nome"] for c in lista_clientes])
-                col1, col2 = st.columns(2)
-                with col1:
-                    mes_comp = st.selectbox("Mês de Competência:", LISTA_MESES, index=datetime.now().month - 1)
-                with col2:
-                    ano_comp = st.selectbox("Ano de Competência:", LISTA_ANOS, index=1)
-                arquivo_mensal = st.file_uploader("Arquivo (PDF/XML/XLSX):", type=["pdf", "xml", "zip", "xlsx"])
+        if tipo_envio == "Documento Mensal (Imposto/Guia)":
+            col1, col2 = st.columns(2)
+            with col1:
+                mes_comp = st.selectbox("Mês de Competência:", LISTA_MESES, index=datetime.now().month - 1)
+            with col2:
+                ano_comp = st.selectbox("Ano de Competência:", LISTA_ANOS, index=1)
+            arquivo_upload = st.file_uploader("Selecione o arquivo (PDF/XML/XLSX):", type=["pdf", "xml", "zip", "xlsx"])
+        else:
+            mes_comp = None
+            ano_comp = None
+            descricao_doc = st.text_input("Descrição do Documento Fixo", help="Ex: Contrato Social, Cartão CNPJ, Alvará, Inscrição Estadual")
+            arquivo_upload = st.file_uploader("Selecione o arquivo (PDF/JPG/PNG):", type=["pdf", "jpg", "png"])
 
-                if st.form_submit_button("Salvar Documento Mensal"):
-                    if not arquivo_mensal:
-                        st.error("Anexe um arquivo antes de salvar.")
-                    else:
-                        id_cliente = next(c["id"] for c in lista_clientes if c["nome"] == cliente_sel)
-                        nome_limpo = f"{id_cliente}_{ano_comp}_{mes_comp}_{int(datetime.now().timestamp())}_{arquivo_mensal.name}"
-                        caminho_storage = f"guias/{nome_limpo}"
-                        supabase.storage.from_("documentos-clientes").upload(
-                            path=caminho_storage,
-                            file=arquivo_mensal.getvalue(),
-                            file_options={"content-type": arquivo_mensal.type}
-                        )
-                        supabase.table("arquivos_escritorio").insert({
-                            "cliente_id": id_cliente,
-                            "ano": ano_comp,
-                            "mes": mes_comp,
-                            "nome_arquivo": arquivo_mensal.name,
-                            "caminho_storage": caminho_storage,
-                            "data_publicacao": datetime.now().strftime("%d/%m/%Y %H:%M")
-                        }).execute()
-                        st.success("Documento mensal salvo com sucesso.")
-
-        with sub_tab_fixos:
-            st.subheader("Upload de Documentos Fixos / Institucionais")
-            with st.form("form_doc_fixo"):
-                cliente_selecionado = st.selectbox("Selecione o Cliente:", [c["nome"] for c in lista_clientes])
-                descricao_doc = st.text_input("Descrição do Documento Fixo", help="Ex: Contrato Social, Cartão CNPJ, Alvará, Inscrição Estadual")
-                arquivo_upload = st.file_uploader("Selecione o arquivo (PDF/JPG/PNG):", type=["pdf", "jpg", "png"])
-
-                if st.form_submit_button("Salvar Documento Institucional"):
-                    if not descricao_doc or not arquivo_upload:
-                        st.error("Por favor informe a descrição e anexe o arquivo.")
-                    else:
-                        id_cliente = next(c["id"] for c in lista_clientes if c["nome"] == cliente_selecionado)
-                        nome_limpo = f"{id_cliente}_{int(datetime.now().timestamp())}_{arquivo_upload.name}"
-                        caminho_storage = f"documentos/{nome_limpo}"
-
-                        supabase.storage.from_("documentos-fixos").upload(
-                            path=caminho_storage,
-                            file=arquivo_upload.getvalue(),
-                            file_options={"content-type": arquivo_upload.type}
-                        )
-                        supabase.table("documentos_fixos").insert({
-                            "cliente_id": id_cliente,
-                            "tipo_documento": descricao_doc,
-                            "nome_arquivo": arquivo_upload.name,
-                            "caminho_storage": caminho_storage
-                        }).execute()
-                        st.success(f"Documento institucional '{descricao_doc}' enviado com sucesso.")
-
-            st.markdown("---")
-            st.markdown("### Documentos institucionais já cadastrados")
-            documentos_fixos = carregar_documentos_fixos()
-            if documentos_fixos:
-                df_fixos = pd.DataFrame(documentos_fixos)
-                if not df_fixos.empty:
-                    st.dataframe(df_fixos[["cliente_id", "tipo_documento", "nome_arquivo"]].rename(columns={"cliente_id": "Cliente ID", "tipo_documento": "Descrição", "nome_arquivo": "Arquivo"}), use_container_width=True)
+        if st.form_submit_button("Enviar Documento"):
+            if not arquivo_upload:
+                st.error("Anexe um arquivo antes de enviar.")
+            elif tipo_envio == "Documento Fixo (Institucional)" and not descricao_doc:
+                st.error("Informe a descrição do documento fixo.")
             else:
-                st.info("Nenhum documento institucional cadastrado ainda.")
+                nome_limpo = f"{id_cliente}_{int(datetime.now().timestamp())}_{arquivo_upload.name}"
+                if tipo_envio == "Documento Mensal (Imposto/Guia)":
+                    caminho_storage = f"guias/{nome_limpo}"
+                    supabase.storage.from_("documentos-clientes").upload(
+                        path=caminho_storage,
+                        file=arquivo_upload.getvalue(),
+                        file_options={"content-type": arquivo_upload.type}
+                    )
+                    supabase.table("arquivos_escritorio").insert({
+                        "cliente_id": id_cliente,
+                        "ano": ano_comp,
+                        "mes": mes_comp,
+                        "nome_arquivo": arquivo_upload.name,
+                        "caminho_storage": caminho_storage,
+                        "data_publicacao": datetime.now().strftime("%d/%m/%Y %H:%M")
+                    }).execute()
+                    st.success("Documento mensal salvo na tabela arquivos_escritorio com sucesso.")
+                else:
+                    caminho_storage = f"documentos/{nome_limpo}"
+                    supabase.storage.from_("documentos-fixos").upload(
+                        path=caminho_storage,
+                        file=arquivo_upload.getvalue(),
+                        file_options={"content-type": arquivo_upload.type}
+                    )
+                    supabase.table("documentos_fixos").insert({
+                        "cliente_id": id_cliente,
+                        "tipo_documento": descricao_doc,
+                        "nome_arquivo": arquivo_upload.name,
+                        "caminho_storage": caminho_storage
+                    }).execute()
+                    st.success("Documento fixo salvo na tabela documentos_fixos com sucesso.")
 
-    with tab_tarefas:
-        st.markdown("### Tarefas pendentes")
-        df_tarefas = df_from_data(tarefas)
-        df_clientes = df_from_data(clientes)
+    with st.expander("Documentos já cadastrados"):
+        st.markdown("### Documentos Fixos")
+        documentos_fixos = carregar_documentos_fixos()
+        if documentos_fixos:
+            df_fixos = pd.DataFrame(documentos_fixos)
+            st.dataframe(df_fixos[["cliente_id", "tipo_documento", "nome_arquivo"].copy()].rename(columns={"cliente_id": "Cliente ID", "tipo_documento": "Descrição", "nome_arquivo": "Arquivo"}), use_container_width=True)
+        else:
+            st.info("Nenhum documento fixo cadastrado ainda.")
 
-        if df_tarefas.empty:
-            st.info("Não há tarefas cadastradas.")
-            return
-
-        tarefas_pendentes = df_tarefas[df_tarefas["status"] == "Pendente"]
-        if tarefas_pendentes.empty:
-            st.success("Todas as tarefas estão concluídas.")
-            return
-
-        tarefas_pendentes = tarefas_pendentes.merge(df_clientes[["id", "nome"]], left_on="cliente_id", right_on="id", how="left")
-        tarefas_pendentes = tarefas_pendentes.sort_values(by=["ano", "mes"])
-
-        for _, tarefa in tarefas_pendentes.iterrows():
-            with st.expander(f"{tarefa['nome']} — {tarefa['obrigacao']} ({tarefa['mes']}/{tarefa['ano']})"):
-                st.write(f"**Cliente:** {tarefa['nome']}")
-                st.write(f"**Obrigação:** {tarefa['obrigacao']}")
-                st.write(f"**Vencimento:** {tarefa['vencimento']}")
-                st.write(f"**Periodicidade:** {tarefa['periodicidade']}")
-                st.write(f"**Prioridade:** {tarefa.get('alerta', '✅ Normal')}")
-
-                arquivo_guia = st.file_uploader(
-                    "Anexar guia ou comprovante", type=["pdf", "xml", "zip", "xlsx"], key=f"file_tarefa_{tarefa['id']}"
-                )
-                if st.button("Concluir Atividade", key=f"btn_tarefa_{tarefa['id']}"):
-                    update_data = {
-                        "status": "Concluído",
-                        "alerta": "✅ Normal",
-                        "data_conclusao": datetime.now().strftime("%d/%m/%Y %H:%M")
-                    }
-                    if arquivo_guia:
-                        nome_limpo = f"{tarefa['id']}_{arquivo_guia.name}"
-                        caminho_storage = f"guias/{nome_limpo}"
-                        supabase.storage.from_("documentos-clientes").upload(
-                            path=caminho_storage,
-                            file=arquivo_guia.getvalue(),
-                            file_options={"content-type": arquivo_guia.type}
-                        )
-                        supabase.table("arquivos_escritorio").insert({
-                            "cliente_id": int(tarefa["cliente_id"]),
-                            "ano": tarefa["ano"],
-                            "mes": tarefa["mes"],
-                            "nome_arquivo": arquivo_guia.name,
-                            "caminho_storage": caminho_storage,
-                            "data_publicacao": datetime.now().strftime("%d/%m/%Y %H:%M")
-                        }).execute()
-
-                    supabase.table("tarefas").update(update_data).eq("id", int(tarefa["id"])).execute()
-                    st.success("Tarefa marcada como concluída.")
-                    st.experimental_rerun()
+        st.markdown("---")
+        st.markdown("### Documentos Mensais")
+        arquivos = carregar_arquivos_escritorio()
+        if arquivos:
+            df_arquivos = pd.DataFrame(arquivos)
+            st.dataframe(df_arquivos[["cliente_id", "ano", "mes", "nome_arquivo", "data_publicacao"].copy()].rename(columns={"cliente_id": "Cliente ID", "nome_arquivo": "Arquivo", "data_publicacao": "Data de Publicação"}), use_container_width=True)
+        else:
+            st.info("Nenhum documento mensal cadastrado ainda.")
 
 
 def render_cadastrar_cliente():
@@ -660,59 +602,53 @@ def render_portal_cliente():
 
     cliente = cli_res.data[0]
     st.title(f"👤 Portal do Cliente - {cliente['nome']}")
-    st.markdown("Acesse seus documentos institucionais e guias fiscais por competência.")
+    st.markdown("Acesse seus documentos fixos e guias mensais com filtros claros por competência.")
 
-    tab_fixos, tab_mensais = st.tabs(["📁 Documentos Fixos da Empresa", "📅 Guias e Documentos Mensais"])
+    tab_fixos, tab_mensais = st.tabs(["📁 Documentos Fixos", "📅 Guias e Impostos Mensais"])
 
     with tab_fixos:
         docs_fixos = supabase.table("documentos_fixos").select("*").eq("cliente_id", cliente["id"]).execute().data or []
         if docs_fixos:
             df_fixos = pd.DataFrame(docs_fixos)
-            if not df_fixos.empty:
-                st.dataframe(
-                    df_fixos[["tipo_documento", "nome_arquivo"]].rename(columns={"tipo_documento": "Descrição", "nome_arquivo": "Arquivo"}),
-                    use_container_width=True
-                )
-                st.markdown("---")
-                for doc in docs_fixos:
-                    try:
-                        assinatura = supabase.storage.from_("documentos-fixos").create_signed_url(doc["caminho_storage"], 60)
-                        st.markdown(f"- **{doc['tipo_documento']}** — {doc['nome_arquivo']} — <a href=\"{assinatura['signedUrl']}\" target=\"_blank\">Abrir / Baixar</a>", unsafe_allow_html=True)
-                    except Exception:
-                        st.markdown(f"- **{doc['tipo_documento']}** — {doc['nome_arquivo']} — Erro ao gerar link")
+            df_fixos_exib = df_fixos[["tipo_documento", "nome_arquivo"]].rename(columns={"tipo_documento": "Descrição", "nome_arquivo": "Arquivo"})
+            st.dataframe(df_fixos_exib, use_container_width=True)
+            st.markdown("---")
+            for doc in docs_fixos:
+                try:
+                    assinatura = supabase.storage.from_("documentos-fixos").create_signed_url(doc["caminho_storage"], 60)
+                    st.markdown(f"- **{doc['tipo_documento']}** — {doc['nome_arquivo']} — <a href=\"{assinatura['signedUrl']}\" target=\"_blank\">Abrir / Baixar</a>", unsafe_allow_html=True)
+                except Exception:
+                    st.markdown(f"- **{doc['tipo_documento']}** — {doc['nome_arquivo']} — Erro ao gerar link")
         else:
-            st.info("Nenhum documento institucional anexado ainda.")
+            st.info("Nenhum documento fixo encontrado.")
 
     with tab_mensais:
-        col_a, col_b = st.columns([1, 1])
+        col_a, col_b = st.columns(2)
         with col_a:
-            ano_filtrado = st.selectbox("Filtrar por ano:", ["Todos"] + LISTA_ANOS, index=1)
+            mes_filtrado = st.selectbox("Mês:", ["Todos"] + LISTA_MESES, index=datetime.now().month)
         with col_b:
-            mes_filtrado = st.selectbox("Filtrar por mês:", ["Todos"] + LISTA_MESES, index=datetime.now().month)
+            ano_filtrado = st.selectbox("Ano:", ["Todos"] + LISTA_ANOS, index=1)
 
         query = supabase.table("arquivos_escritorio").select("*").eq("cliente_id", cliente["id"])
-        if ano_filtrado != "Todos":
-            query = query.eq("ano", ano_filtrado)
         if mes_filtrado != "Todos":
             query = query.eq("mes", mes_filtrado)
-        arquivos = query.execute().data or []
+        if ano_filtrado != "Todos":
+            query = query.eq("ano", ano_filtrado)
 
+        arquivos = query.execute().data or []
         if arquivos:
             df_arquivos = pd.DataFrame(arquivos)
-            if not df_arquivos.empty:
-                st.dataframe(
-                    df_arquivos[["ano", "mes", "nome_arquivo", "data_publicacao"]].rename(columns={"ano": "Ano", "mes": "Mês", "nome_arquivo": "Arquivo", "data_publicacao": "Disponibilizado em"}),
-                    use_container_width=True
-                )
-                st.markdown("---")
-                for arq in arquivos:
-                    try:
-                        assinatura = supabase.storage.from_("documentos-clientes").create_signed_url(arq["caminho_storage"], 60)
-                        st.markdown(f"- **{arq['nome_arquivo']}** ({arq['mes']}/{arq['ano']}) — <a href=\"{assinatura['signedUrl']}\" target=\"_blank\">Baixar</a>", unsafe_allow_html=True)
-                    except Exception:
-                        st.markdown(f"- **{arq['nome_arquivo']}** ({arq['mes']}/{arq['ano']}) — Erro ao gerar link")
+            df_arquivos_exib = df_arquivos[["ano", "mes", "nome_arquivo", "data_publicacao"]].rename(columns={"ano": "Ano", "mes": "Mês", "nome_arquivo": "Arquivo", "data_publicacao": "Data de Publicação"})
+            st.dataframe(df_arquivos_exib, use_container_width=True)
+            st.markdown("---")
+            for arq in arquivos:
+                try:
+                    assinatura = supabase.storage.from_("documentos-clientes").create_signed_url(arq["caminho_storage"], 60)
+                    st.markdown(f"- **{arq['nome_arquivo']}** ({arq['mes']}/{arq['ano']}) — <a href=\"{assinatura['signedUrl']}\" target=\"_blank\">Baixar</a>", unsafe_allow_html=True)
+                except Exception:
+                    st.markdown(f"- **{arq['nome_arquivo']}** ({arq['mes']}/{arq['ano']}) — Erro ao gerar link")
         else:
-            st.warning("Nenhum documento mensal disponível para o período selecionado.")
+            st.warning("Nenhum guia ou imposto mensal disponível para a competência selecionada.")
 
 
 # --- FLUXO PRINCIPAL ---
