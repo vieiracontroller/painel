@@ -615,7 +615,18 @@ def render_base_clientes():
 
             if col_ligacao:
                 df_final = pd.merge(df_usuarios, df_clientes, left_on=col_ligacao, right_on='id', suffixes=('_user', '_empresa'))
-                st.dataframe(df_final)
+                df_final['empresa'] = df_final['nome_empresa'] if 'nome_empresa' in df_final.columns else df_final.get('nome', '-')
+                df_final['regime'] = df_final['regime'] if 'regime' in df_final.columns else '-'
+                df_final['status_cadastro'] = df_final['status_cadastro'].fillna('Ativo') if 'status_cadastro' in df_final.columns else 'Ativo'
+
+                df_ativos = df_final[df_final['status_cadastro'] == 'Ativo']
+                df_inativos = df_final[df_final['status_cadastro'] == 'Inativo']
+
+                st.subheader('🟢 Clientes Ativos')
+                st.dataframe(df_ativos[['empresa', 'regime', 'status_cadastro', 'email', 'senha', 'id_empresa']], use_container_width=True)
+
+                st.subheader('🔴 Clientes Inativos')
+                st.dataframe(df_inativos[['empresa', 'regime', 'status_cadastro', 'email', 'senha', 'id_empresa']], use_container_width=True)
             else:
                 st.warning("Coluna de vínculo entre tabelas não encontrada automaticamente. Exibindo dados brutos:")
                 st.dataframe(df_usuarios)
@@ -626,27 +637,30 @@ def render_base_clientes():
 
     st.markdown("---")
     st.subheader("Mudar Status do Cliente")
-    clientes = carregar_clientes()
-    if not clientes:
+
+    if 'df_final' in locals() and not df_final.empty:
+        clientes_base = df_final[['empresa', 'id_empresa']].drop_duplicates().to_dict('records')
+    else:
+        clientes = carregar_clientes()
+        clientes_base = [{'empresa': c['nome'], 'id_empresa': c['id']} for c in clientes]
+
+    if not clientes_base:
         st.warning("Cadastre ao menos um cliente antes de atualizar o status.")
         return
 
-    with st.form("form_status_cliente"):
-        cliente_selecionado = st.selectbox("Selecione o Cliente:", [c["nome"] for c in clientes])
-        novo_status = st.radio("Status de Cadastro:", ["Ativo", "Inativo"], index=0)
-        salvar_status = st.form_submit_button("Salvar Status")
+    with st.form('form_status_cliente'):
+        cliente_selecionado = st.selectbox('Selecione o Cliente:', [c['empresa'] for c in clientes_base])
+        novo_status = st.radio('Status de Cadastro:', ['Ativo', 'Inativo'], index=0)
+        salvar_status = st.form_submit_button('Salvar Status')
 
         if salvar_status:
-            cliente_id = next(c["id"] for c in clientes if c["nome"] == cliente_selecionado)
-            supabase.table("clientes").update({"status_cadastro": novo_status}).eq("id", cliente_id).execute()
-            st.success(f"Status do cliente atualizado para {novo_status}.")
-            st.rerun()
-
-    if novo_status == "Inativo":
-        cliente_id = next(c["id"] for c in clientes if c["nome"] == cliente_selecionado)
-        if st.button("🚨 Excluir Tarefas Pendentes deste Cliente Inativo"):
-            supabase.table("tarefas").delete().eq("cliente_id", cliente_id).eq("status", "Pendente").execute()
-            st.success("Tarefas pendentes do cliente inativo excluídas com sucesso.")
+            id_cliente_correto = next(c['id_empresa'] for c in clientes_base if c['empresa'] == cliente_selecionado)
+            supabase.table('clientes').update({'status_cadastro': novo_status}).eq('id', id_cliente_correto).execute()
+            if novo_status == 'Inativo':
+                supabase.table('tarefas').delete().eq('cliente_id', id_cliente_correto).eq('status', 'Pendente').execute()
+                st.success('Status atualizado! Obrigações pendentes removidas caso inativado.')
+            else:
+                st.success('Status atualizado!')
             st.rerun()
 
 
