@@ -10,9 +10,19 @@ st.set_page_config(page_title="Gestão Vieira Controller", layout="wide")
 # --- CONEXÃO SEGURA COM SUPABASE ---
 @st.cache_resource
 def inicializar_supabase() -> Client:
-    # Captura e limpa as credenciais dos Secrets
+    # Captura os dados dos Secrets limpando aspas e espaços
     url_limpa = str(st.secrets["supabase"]["url"]).strip().strip('"').strip("'")
-    key_secret = str(st.secrets["supabase"]["key"]).strip().strip('"').strip("'").replace("\n", "").replace("\r", "")
+    key_secret = str(st.secrets["supabase"]["key"]).strip().strip('"').strip("'")
+    key_public = str(st.secrets["supabase"].get("public_key", key_secret)).strip().strip('"').strip("'")
+    
+    # Injeta os cabeçalhos necessários para o mapeamento da chave sb_secret
+    headers = {
+        "apikey": key_secret,
+        "Authorization": f"Bearer {key_secret}"
+    }
+    
+    # Inicializa o cliente mapeando a chave pública e a secreta simultaneamente
+    return create_client(url_limpa, key_public, options={"headers": headers})
     
     # Se você também adicionou a chave pública nos Secrets, capturamos ela aqui.
     # Caso contrário, usamos a secret como fallback para montar a requisição base.
