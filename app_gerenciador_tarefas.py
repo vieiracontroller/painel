@@ -331,14 +331,22 @@ def carregar_tarefas():
 
 def carregar_documentos_fixos():
     escritorio_id = garantir_escritorio_id()
-    res = supabase.table("documentos_fixos").select("*, clientes(nome)").eq("escritorio_id", escritorio_id).execute()
-    return res.data or []
+    try:
+        res = supabase.table("documentos_fixos").select("*, clientes(nome)").eq("escritorio_id", escritorio_id).execute()
+        return res.data or []
+    except Exception as e:
+        _avisar_falha_carregamento("documentos_fixos", "os documentos fixos", e)
+        return []
 
 
 def carregar_arquivos_escritorio():
     escritorio_id = garantir_escritorio_id()
-    res = supabase.table("arquivos_escritorio").select("*").eq("escritorio_id", escritorio_id).execute()
-    return res.data or []
+    try:
+        res = supabase.table("arquivos_escritorio").select("*").eq("escritorio_id", escritorio_id).execute()
+        return res.data or []
+    except Exception as e:
+        _avisar_falha_carregamento("arquivos_escritorio", "os arquivos do escritorio", e)
+        return []
 
 
 def carregar_acessos():
