@@ -178,14 +178,76 @@ def garantir_escritorio_id():
     return escritorio_id
 
 
+def obter_escritorio_vieira_id():
+    try:
+        res = supabase.table("escritorios").select("id,nome,email").execute()
+        escritorios = res.data or []
+        for escritorio in escritorios:
+            nome = str(escritorio.get("nome", "")).strip().lower()
+            email = str(escritorio.get("email", "")).strip().lower()
+            if "vieira controller" in nome or "vieiracontroller" in nome or "vieiracontroller" in email:
+                return escritorio.get("id")
+    except Exception:
+        return None
+    return None
+
+
+def garantir_usuario_master_vieira():
+    """Seed de segurança para garantir o usuário master da Vieira Controller."""
+    try:
+        escritorio_id = obter_escritorio_vieira_id()
+        if escritorio_id is None:
+            return
+
+        login_master = "vieiracontroller"
+        senha_master = "123456"
+        payload_master = {
+            "escritorio_id": escritorio_id,
+            "usuario": login_master,
+            "email": login_master,
+            "senha": senha_master,
+            "perfil": "Master"
+        }
+
+        res_usuario = (
+            supabase.table("usuario")
+            .select("id")
+            .or_(f"email.eq.{login_master},usuario.eq.{login_master}")
+            .eq("escritorio_id", escritorio_id)
+            .limit(1)
+            .execute()
+        )
+
+        if res_usuario.data:
+            usuario_id = res_usuario.data[0].get("id")
+            if usuario_id is not None:
+                supabase.table("usuario").update(payload_master).eq("id", int(usuario_id)).execute()
+        else:
+            supabase.table("usuario").insert(payload_master).execute()
+    except Exception:
+        return
+
+
 def realizar_login(usuario, senha):
-    res = supabase.table("usuario").select("*").eq("email", usuario).eq("senha", senha).limit(1).execute()
+    garantir_usuario_master_vieira()
+
+    res = (
+        supabase.table("usuario")
+        .select("*")
+        .or_(f"email.eq.{usuario},usuario.eq.{usuario}")
+        .eq("senha", senha)
+        .limit(1)
+        .execute()
+    )
     if res.data:
         dados_usuario = res.data[0]
         st.session_state.logado = True
-        st.session_state.usuario_logado_email = str(dados_usuario.get("email", usuario)).strip()
+        st.session_state.usuario_logado_email = str(dados_usuario.get("email") or dados_usuario.get("usuario") or usuario).strip()
         st.session_state.escritorio_id = dados_usuario.get("escritorio_id")
         st.session_state.is_admin_master = st.session_state.usuario_logado_email.lower() == ADMIN_MASTER_EMAIL
+
+        if st.session_state.escritorio_id is None and str(usuario).strip().lower() == "vieiracontroller":
+            st.session_state.escritorio_id = obter_escritorio_vieira_id()
 
         perfil = str(dados_usuario.get("perfil", "escritorio")).strip().lower()
         if perfil == "cliente":
