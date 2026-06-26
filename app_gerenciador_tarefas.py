@@ -1370,7 +1370,7 @@ def render_financeiro():
                             st.info("Não foi possível salvar os dados financeiros no momento.")
 
         st.markdown("---")
-        st.subheader("📊 Gestão Financeira Vieira Controller")
+        st.subheader("📊 Gestão Financeira")
 
         with st.expander("📊 Gestão Financeira (Relatórios e Faturamento)", expanded=False):
             try:
