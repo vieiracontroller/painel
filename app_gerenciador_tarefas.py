@@ -1732,23 +1732,78 @@ def render_gestao_saas():
         st.error("Acesso restrito ao admin master.")
         return
 
+    def carregar_planos_saas():
+        try:
+            res = supabase.table("planos_saas").select("*").order("nome").execute()
+            return res.data or []
+        except Exception:
+            return []
+
+    st.subheader("📦 Gerenciar Planos e Permissões")
+    with st.expander("📦 Cadastrar Novo Plano", expanded=True):
+        with st.form("form_novo_plano"):
+            nome_plano = st.text_input("Nome do Plano")
+            valor_mensal = st.number_input("Valor Mensal", min_value=0.0, step=50.0, format="%.2f")
+            modulos_liberados = st.multiselect(
+                "Permissões / Módulos Liberados",
+                ["Dashboard Geral", "Documentos e Tarefas", "Cadastrar Cliente", "Central de Obrigações", "Base de Clientes", "Financeiro", "Gestão SaaS"]
+            )
+
+            if st.form_submit_button("Salvar Plano"):
+                if not nome_plano:
+                    st.error("Informe o nome do plano.")
+                else:
+                    try:
+                        supabase.table("planos_saas").insert({
+                            "nome": nome_plano,
+                            "valor_mensal": float(valor_mensal),
+                            "modulos_liberados": modulos_liberados
+                        }).execute()
+                        st.success("Plano cadastrado com sucesso.")
+                        st.rerun()
+                    except Exception:
+                        st.info("Não foi possível salvar o plano neste momento.")
+
     with st.expander("🏢 Cadastrar Novo Escritório", expanded=True):
+        try:
+            planos_cadastrados = carregar_planos_saas()
+        except Exception:
+            planos_cadastrados = []
+
+        if planos_cadastrados:
+            opcoes_planos = []
+            mapa_planos = {}
+            for plano in planos_cadastrados:
+                nome_plano_db = str(plano.get("nome", "Plano")).strip()
+                valor_plano_db = float(to_python_scalar(plano.get("valor_mensal", 0) or 0))
+                label_plano = f"{nome_plano_db} - R$ {valor_plano_db:,.2f}"
+                opcoes_planos.append(label_plano)
+                mapa_planos[label_plano] = plano
+        else:
+            opcoes_planos = ["Starter - R$ 0,00", "Pro - R$ 0,00", "Enterprise - R$ 0,00"]
+            mapa_planos = {
+                "Starter - R$ 0,00": {"nome": "Starter", "valor_mensal": 0},
+                "Pro - R$ 0,00": {"nome": "Pro", "valor_mensal": 0},
+                "Enterprise - R$ 0,00": {"nome": "Enterprise", "valor_mensal": 0},
+            }
+
         with st.form("form_novo_escritorio"):
             nome_escritorio = st.text_input("Nome do Escritório")
             email_escritorio = st.text_input("E-mail de Contato")
             telefone_escritorio = st.text_input("Telefone")
-            plano_escritorio = st.selectbox("Plano", ["Starter", "Pro", "Enterprise"], index=0)
+            plano_escritorio_label = st.selectbox("Plano", opcoes_planos, index=0)
 
             if st.form_submit_button("Cadastrar Escritório"):
                 if not nome_escritorio or not email_escritorio:
                     st.error("Informe ao menos nome e e-mail do escritório.")
                 else:
                     try:
+                        plano_escolhido = mapa_planos.get(plano_escritorio_label, {})
                         insert_escritorio = supabase.table("escritorios").insert({
                             "nome": nome_escritorio,
                             "email": email_escritorio,
                             "telefone": telefone_escritorio,
-                            "plano": plano_escritorio,
+                            "plano": plano_escolhido.get("nome", plano_escritorio_label.split(" - ")[0]),
                             "status": "Ativo",
                             "data_cadastro": datetime.now().strftime("%Y-%m-%d")
                         }).execute()
@@ -1758,8 +1813,8 @@ def render_gestao_saas():
 
                         st.session_state["novo_escritorio_id"] = insert_escritorio.data[0].get("id")
                         st.success("Escritório cadastrado com sucesso.")
-                    except Exception as e:
-                        st.error(f"Erro ao cadastrar escritório: {e}")
+                    except Exception:
+                        st.info("Não foi possível cadastrar o escritório neste momento.")
 
     with st.expander("👤 Cadastrar Primeiro Usuário Administrador", expanded=True):
         try:
