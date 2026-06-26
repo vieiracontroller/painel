@@ -1787,6 +1787,35 @@ def render_gestao_saas():
             st.warning(f"Nao foi possivel carregar a lista de escritorios: {e}")
             return []
 
+    def carregar_admins_escritorios():
+        try:
+            usuarios_res = (
+                supabase.table("usuarios_escritorio")
+                .select("id,nome,email,perfil,escritorio_id,senha")
+                .order("nome")
+                .execute()
+            )
+            usuarios = usuarios_res.data or []
+
+            escritorios_res = supabase.table("escritorios").select("id,nome").execute()
+            escritorios = escritorios_res.data or []
+            mapa_escritorios = {
+                to_python_scalar(item.get("id")): str(item.get("nome", "-")).strip() or "-"
+                for item in escritorios
+            }
+
+            for usuario in usuarios:
+                escritorio_ref = to_python_scalar(usuario.get("escritorio_id"))
+                senha_bruta = str(usuario.get("senha") or "").strip()
+                usuario["escritorio_nome"] = mapa_escritorios.get(escritorio_ref, "-")
+                usuario["credencial"] = "Definida" if senha_bruta else "Nao definida"
+                usuario["senha"] = "********" if senha_bruta else "-"
+
+            return usuarios
+        except Exception as e:
+            st.error(f"Erro ao carregar administradores: {e}")
+            return []
+
     st.subheader("📦 Gerenciar Planos e Permissões")
     with st.expander("📦 Cadastrar Novo Plano", expanded=True):
         with st.form("form_novo_plano"):
@@ -2032,6 +2061,87 @@ def render_gestao_saas():
                     except Exception as e:
                         st.error(f"Erro: {e}")
 
+    st.subheader("🔑 Administradores de Escritórios")
+    col_admin_refresh, _ = st.columns([1, 5])
+    with col_admin_refresh:
+        if st.button("🔄 Atualizar Administradores", key="atualizar_lista_admins"):
+            st.rerun()
+
+    admins_escritorios = carregar_admins_escritorios()
+    if admins_escritorios:
+        df_admins = pd.DataFrame(admins_escritorios)
+        colunas_admins = ["id", "nome", "email", "perfil", "escritorio_id", "escritorio_nome", "credencial", "senha"]
+        for coluna in colunas_admins:
+            if coluna not in df_admins.columns:
+                df_admins[coluna] = "-"
+        st.dataframe(df_admins[colunas_admins], use_container_width=True, hide_index=True)
+    else:
+        st.info("Nenhum administrador de escritório cadastrado.")
+
+
+def render_meu_acesso():
+    st.title("👤 Meu Acesso")
+
+    usuario_logado = st.session_state.get("usuario_logado")
+    if not isinstance(usuario_logado, dict):
+        usuario_logado = {}
+
+    if not usuario_logado.get("id"):
+        try:
+            email_logado = str(st.session_state.get("usuario_logado_email") or "").strip()
+            escritorio_id = st.session_state.get("escritorio_id")
+            if email_logado:
+                query = supabase.table("usuarios_escritorio").select("*").eq("email", email_logado)
+                if escritorio_id is not None:
+                    query = query.eq("escritorio_id", escritorio_id)
+                res_usuario = query.limit(1).execute()
+                if res_usuario.data:
+                    usuario_logado = res_usuario.data[0]
+                    st.session_state["usuario_logado"] = usuario_logado
+        except Exception:
+            usuario_logado = usuario_logado or {}
+
+    nome_usuario = str(usuario_logado.get("nome") or usuario_logado.get("usuario") or "-")
+    email_usuario = str(usuario_logado.get("email") or st.session_state.get("usuario_logado_email") or "-")
+
+    col_info_nome, col_info_email = st.columns(2)
+    with col_info_nome:
+        st.write(f"**Nome:** {nome_usuario}")
+    with col_info_email:
+        st.write(f"**E-mail:** {email_usuario}")
+
+    st.markdown("---")
+    st.subheader("🔒 Alterar Senha")
+
+    with st.form("form_alterar_senha_meu_acesso"):
+        nova_senha = st.text_input("Nova Senha", type="password", key="nova_senha_meu_acesso")
+        confirmar_senha = st.text_input("Confirme a Nova Senha", type="password", key="confirmar_nova_senha_meu_acesso")
+
+        if st.form_submit_button("Atualizar Senha"):
+            if not nova_senha or not confirmar_senha:
+                st.error("Preencha os dois campos de senha.")
+            elif nova_senha != confirmar_senha:
+                st.error("As senhas informadas nao coincidem.")
+            elif len(nova_senha) < 6:
+                st.error("A nova senha deve ter pelo menos 6 caracteres.")
+            else:
+                try:
+                    usuario_id = to_python_scalar(usuario_logado.get("id"))
+                    if usuario_id is None:
+                        raise ValueError("ID do usuario logado nao encontrado na sessao.")
+
+                    escritorio_id = st.session_state.get("escritorio_id")
+                    query_update = supabase.table("usuarios_escritorio").update({"senha": nova_senha}).eq("id", int(usuario_id))
+                    if escritorio_id is not None:
+                        query_update = query_update.eq("escritorio_id", escritorio_id)
+                    query_update.execute()
+
+                    if isinstance(st.session_state.get("usuario_logado"), dict):
+                        st.session_state["usuario_logado"]["senha"] = nova_senha
+                    st.success("Senha atualizada com sucesso.")
+                except Exception as e:
+                    st.error(f"Erro ao atualizar senha: {e}")
+
 # ============================================================================
 # FLUXO PRINCIPAL - AUTENTICAÇÃO E NAVEGAÇÃO
 # ============================================================================
@@ -2049,8 +2159,8 @@ else:
     if st.session_state.perfil == "escritorio":
         render_branding_sidebar()
         with st.sidebar:
-            opcoes_menu = ["Dashboard Geral", "Documentos e Tarefas", "Cadastrar Cliente", "Central de Obrigações", "Base de Clientes", "Financeiro"]
-            icones_menu = ["house", "file-earmark-check", "plus-circle", "calendar-check", "people", "currency-dollar"]
+            opcoes_menu = ["Dashboard Geral", "Documentos e Tarefas", "Cadastrar Cliente", "Central de Obrigações", "Base de Clientes", "Financeiro", "👤 Meu Acesso"]
+            icones_menu = ["house", "file-earmark-check", "plus-circle", "calendar-check", "people", "currency-dollar", "person-circle"]
             if st.session_state.get("is_admin_master", False):
                 opcoes_menu.append("Gestão SaaS")
                 icones_menu.append("gear-wide-connected")
@@ -2090,6 +2200,8 @@ else:
             render_base_clientes()
         elif escolha == "Financeiro":
             render_financeiro()
+        elif escolha == "👤 Meu Acesso":
+            render_meu_acesso()
         elif escolha == "Gestão SaaS":
             render_gestao_saas()
     else:
@@ -2099,8 +2211,8 @@ else:
 
             opcao_cliente = option_menu(
                 menu_title=None,
-                options=["Meu Portal", "Logout"],
-                icons=["person-circle", "box-arrow-right"],
+                options=["Meu Portal", "👤 Meu Acesso", "Logout"],
+                icons=["person-circle", "person-gear", "box-arrow-right"],
                 default_index=0,
                 styles={
                     "container": {"padding": "5px!important", "background-color": "#111827"},
@@ -2112,6 +2224,8 @@ else:
 
         if opcao_cliente == "Meu Portal":
             render_portal_cliente()
+        elif opcao_cliente == "👤 Meu Acesso":
+            render_meu_acesso()
         elif opcao_cliente == "Logout":
             st.session_state.logado = False
             st.session_state.perfil = None
