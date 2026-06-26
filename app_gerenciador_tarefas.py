@@ -4,6 +4,7 @@ import plotly.express as px
 from datetime import datetime
 from calendar import monthrange
 from supabase import create_client, Client
+from streamlit_option_menu import option_menu
 
 # ============================================================================
 # CONFIGURAÇÃO DE IDENTIDADE VISUAL - V-CONTROLL HUB
@@ -1537,45 +1538,63 @@ if not st.session_state.logado:
             if st.form_submit_button("Entrar", use_container_width=True):
                 realizar_login(usuario, senha)
 else:
-    st.sidebar.header("🐴 V-CONTROLL HUB")
-    st.sidebar.markdown("---")
-    
-    if st.sidebar.button("🚪 Sair / Logout"):
-        st.session_state.logado = False
-        st.session_state.perfil = None
-        st.session_state.cliente_id_logado = None
-        st.rerun()
-
     if st.session_state.perfil == "escritorio":
-        opcao = st.sidebar.radio("📑 MENU:", [
-            "🏠 Dashboard Geral",
-            "📤 Documentos e Tarefas",
-            "➕ Cadastrar Cliente",
-            "🗂️ Central de Obrigações",
-            "👥 Base de Clientes"
-        ])
+        with st.sidebar:
+            st.markdown("<h3 style='text-align: center; color: #ffffff; font-family: sans-serif; margin-top: 10px; margin-bottom: 20px;'>📊 V-CONTROLL HUB</h3>", unsafe_allow_html=True)
 
-        if opcao == "🏠 Dashboard Geral":
+            escolha = option_menu(
+                menu_title=None,
+                options=["Dashboard Geral", "Documentos e Tarefas", "Cadastrar Cliente", "Central de Obrigações", "Base de Clientes", "Financeiro"],
+                icons=["house", "file-earmark-check", "plus-circle", "calendar-check", "people", "currency-dollar"],
+                menu_icon="cast",
+                default_index=0,
+                styles={
+                    "container": {"padding": "5px!important", "background-color": "#111827"},
+                    "icon": {"color": "#fbbf24", "font-size": "16px"},
+                    "nav-link": {"font-size": "14px", "text-align": "left", "margin": "4px 0px", "color": "#9ca3af", "--hover-color": "#1f2937"},
+                    "nav-link-selected": {"background-color": "#4f46e5", "color": "#ffffff", "font-weight": "600"},
+                }
+            )
+
+            if st.button("🚪 Sair / Logout", use_container_width=True):
+                st.session_state.logado = False
+                st.session_state.perfil = None
+                st.session_state.cliente_id_logado = None
+                st.rerun()
+
+        if escolha == "Dashboard Geral":
             render_dashboard()
-        elif opcao == "📤 Documentos e Tarefas":
+        elif escolha == "Documentos e Tarefas":
             render_upload_documentos()
-        elif opcao == "➕ Cadastrar Cliente":
+        elif escolha == "Cadastrar Cliente":
             render_cadastrar_cliente()
-        elif opcao == "🗂️ Central de Obrigações":
+        elif escolha == "Central de Obrigações":
             render_central_obrigacoes()
-        elif opcao == "👥 Base de Clientes":
+        elif escolha == "Base de Clientes":
+            render_base_clientes()
+        elif escolha == "Financeiro":
             render_base_clientes()
     else:
-        st.sidebar.write(f"Conectado como: **CLIENTE**")
-        st.sidebar.markdown("---")
-        opcao_cliente = st.sidebar.radio("📑 MENU:", [
-            "👤 Meu Portal",
-            "🚪 Logout"
-        ])
-        
-        if opcao_cliente == "👤 Meu Portal":
+        with st.sidebar:
+            st.markdown("<h3 style='text-align: center; color: #ffffff; font-family: sans-serif; margin-top: 10px; margin-bottom: 20px;'>📊 V-CONTROLL HUB</h3>", unsafe_allow_html=True)
+            st.write("Conectado como: **CLIENTE**")
+
+            opcao_cliente = option_menu(
+                menu_title=None,
+                options=["Meu Portal", "Logout"],
+                icons=["person-circle", "box-arrow-right"],
+                default_index=0,
+                styles={
+                    "container": {"padding": "5px!important", "background-color": "#111827"},
+                    "icon": {"color": "#fbbf24", "font-size": "16px"},
+                    "nav-link": {"font-size": "14px", "text-align": "left", "margin": "4px 0px", "color": "#9ca3af", "--hover-color": "#1f2937"},
+                    "nav-link-selected": {"background-color": "#4f46e5", "color": "#ffffff", "font-weight": "600"},
+                }
+            )
+
+        if opcao_cliente == "Meu Portal":
             render_portal_cliente()
-        elif opcao_cliente == "🚪 Logout":
+        elif opcao_cliente == "Logout":
             st.session_state.logado = False
             st.session_state.perfil = None
             st.session_state.cliente_id_logado = None

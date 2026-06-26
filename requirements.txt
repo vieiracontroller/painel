@@ -2,3 +2,4 @@ streamlit
 pandas
 plotly
 supabase
+streamlit-option-menu>=0.3.6
