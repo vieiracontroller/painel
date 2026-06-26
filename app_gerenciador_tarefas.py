@@ -66,6 +66,19 @@ st.markdown(f"""
 </style>
 """, unsafe_allow_html=True)
 
+# Oculta globalmente menu nativo do Streamlit em qualquer estado da aplicacao.
+st.markdown(
+    """
+    <style>
+    #MainMenu {visibility: hidden;}
+    header {visibility: hidden;}
+    footer {visibility: hidden;}
+    .stAppDeployButton {display: none !important;}
+    </style>
+    """,
+    unsafe_allow_html=True
+)
+
 # ============================================================================
 # CONEXÃO SEGURA COM SUPABASE
 # ============================================================================
@@ -183,25 +196,6 @@ def obter_nome_usuario_ativo() -> str:
             return nome_dict
 
     return "Conectado"
-
-
-def aplicar_trava_cabecalho_superior():
-    if not st.session_state.get("logado", False):
-        return
-
-    nome_usuario = obter_nome_usuario_ativo().strip().lower()
-    if nome_usuario != "fernanda":
-        st.markdown(
-            """
-            <style>
-            #MainMenu {visibility: hidden;}
-            header {visibility: hidden;}
-            footer {visibility: hidden;}
-            .stAppDeployButton {display: none !important;}
-            </style>
-            """,
-            unsafe_allow_html=True
-        )
 
 
 def escritorio_id_logado():
@@ -2439,8 +2433,6 @@ def render_meu_acesso():
 # ============================================================================
 # FLUXO PRINCIPAL - AUTENTICAÇÃO E NAVEGAÇÃO
 # ============================================================================
-
-aplicar_trava_cabecalho_superior()
 
 if not st.session_state.logado:
     col1, col2, col3 = st.columns([1, 2, 1])
