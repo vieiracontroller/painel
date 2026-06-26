@@ -1328,9 +1328,10 @@ def render_financeiro():
         with st.expander("📊 Gestão Financeira (Relatórios e Faturamento)", expanded=False):
             try:
                 perfil_usuario = obter_perfil_usuario(st.session_state.get("usuario_logado_email", ""))
+                perfil_sessao = str(st.session_state.get("perfil", "")).strip().lower()
 
-                if perfil_usuario != "Gestão" and st.session_state.perfil != "escritorio":
-                    st.error("❌ Erro: Acesso restrito apenas para o perfil de Gestão.")
+                if perfil_sessao not in {"admin", "escritorio"} and perfil_usuario != "Gestão":
+                    st.error("❌ Erro: Acesso restrito aos perfis autorizados.")
                     return
 
                 st.markdown("Módulo unificado com contas a receber e contas a pagar para o mês atual.")
