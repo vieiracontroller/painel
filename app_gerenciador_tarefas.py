@@ -1743,6 +1743,8 @@ def render_gestao_saas():
     with st.expander("📦 Cadastrar Novo Plano", expanded=True):
         with st.form("form_novo_plano"):
             nome_plano = st.text_input("Nome do Plano")
+            limite_clientes = st.number_input("Limite de Clientes", min_value=1, value=15, step=1)
+            valor_cliente_extra = st.number_input("Valor do Cliente Extra", min_value=0.0, value=2.50, step=0.50, format="%.2f")
             valor_mensal = st.number_input("Valor Mensal", min_value=0.0, step=50.0, format="%.2f")
             modulos_liberados = st.multiselect(
                 "Permissões / Módulos Liberados",
@@ -1758,6 +1760,8 @@ def render_gestao_saas():
                         dados_plano = {
                             "nome": nome_plano,
                             "valor": float(valor_mensal),
+                            "limite_clientes": int(limite_clientes),
+                            "valor_cliente_extra": float(valor_cliente_extra),
                             "modulos_liberados": permissoes_selecionadas
                         }
                         supabase.table("planos_saas").insert(dados_plano).execute()
@@ -1778,12 +1782,16 @@ def render_gestao_saas():
         if not df_planos.empty:
             if "valor" not in df_planos.columns and "valor_mensal" in df_planos.columns:
                 df_planos["valor"] = df_planos["valor_mensal"]
+            if "limite_clientes" not in df_planos.columns:
+                df_planos["limite_clientes"] = "-"
+            if "valor_cliente_extra" not in df_planos.columns:
+                df_planos["valor_cliente_extra"] = "-"
             if "modulos_liberados" in df_planos.columns:
                 df_planos["modulos_liberados"] = df_planos["modulos_liberados"].apply(
                     lambda itens: ", ".join(itens) if isinstance(itens, list) else str(itens or "-")
                 )
 
-            colunas_exibicao_planos = [col for col in ["id", "nome", "valor", "modulos_liberados"] if col in df_planos.columns]
+            colunas_exibicao_planos = [col for col in ["id", "nome", "valor", "limite_clientes", "valor_cliente_extra", "modulos_liberados"] if col in df_planos.columns]
             st.dataframe(df_planos[colunas_exibicao_planos], use_container_width=True)
 
         mapa_planos_edicao = {}
@@ -1801,6 +1809,21 @@ def render_gestao_saas():
         if plano_selecionado:
             with st.form("form_editar_plano"):
                 nome_plano_edit = st.text_input("Nome do Plano", value=str(plano_selecionado.get("nome", "")))
+                limite_clientes_edit = st.number_input(
+                    "Limite de Clientes",
+                    min_value=1,
+                    value=int(to_python_scalar(plano_selecionado.get("limite_clientes", 15)) or 15),
+                    step=1,
+                    key=f"limite_clientes_edit_{plano_selecionado.get('id')}"
+                )
+                valor_cliente_extra_edit = st.number_input(
+                    "Valor do Cliente Extra",
+                    min_value=0.0,
+                    value=float(to_python_scalar(plano_selecionado.get("valor_cliente_extra", 2.50)) or 2.50),
+                    step=0.50,
+                    format="%.2f",
+                    key=f"valor_cliente_extra_edit_{plano_selecionado.get('id')}"
+                )
                 valor_plano_edit = st.number_input(
                     "Valor Mensal",
                     min_value=0.0,
@@ -1823,6 +1846,8 @@ def render_gestao_saas():
                         supabase.table("planos_saas").update({
                             "nome": nome_plano_edit,
                             "valor": float(valor_plano_edit),
+                            "limite_clientes": int(limite_clientes_edit),
+                            "valor_cliente_extra": float(valor_cliente_extra_edit),
                             "modulos_liberados": list(modulos_edit)
                         }).eq("id", int(to_python_scalar(plano_selecionado.get("id")))).execute()
                         st.success("Plano atualizado com sucesso.")
