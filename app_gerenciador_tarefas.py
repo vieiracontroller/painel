@@ -434,6 +434,12 @@ def obter_perfil_usuario(usuario_email):
         return "Cliente"
 
 
+def render_branding_sidebar():
+    st.sidebar.image("logo.png", use_container_width=True)
+    st.sidebar.markdown(" ")
+    st.sidebar.markdown("---")
+
+
 def gerar_data_vencimento(ano: str, mes: str, dia: int):
     """Gera data YYYY-MM-DD com ajuste de dia para o limite do mês."""
     try:
@@ -524,8 +530,7 @@ def gerar_obrigacoes_mes(mes: str, ano: str):
 
 def render_dashboard():
     escritorio_id = garantir_escritorio_id()
-    st.image("logo.png", width=380)
-    st.markdown("Bem-vindo(a) ao centro de monitoramento integrado da Vieira Controller. Acompanhe clientes, tarefas e documentos em tempo real.")
+    st.title("📊 Painel de Controle")
 
     hoje = datetime.now()
     mes_atual = LISTA_MESES[hoje.month - 1]
@@ -1769,6 +1774,19 @@ def render_gestao_saas():
         except Exception:
             return []
 
+    def carregar_escritorios_parceiros():
+        try:
+            res = (
+                supabase.table("escritorios")
+                .select("id,nome,email,telefone,plano,status")
+                .order("nome")
+                .execute()
+            )
+            return res.data or []
+        except Exception as e:
+            st.warning(f"Nao foi possivel carregar a lista de escritorios: {e}")
+            return []
+
     st.subheader("📦 Gerenciar Planos e Permissões")
     with st.expander("📦 Cadastrar Novo Plano", expanded=True):
         with st.form("form_novo_plano"):
@@ -1953,6 +1971,23 @@ def render_gestao_saas():
                     except Exception as e:
                         st.error(f"Erro detalhado: {str(e)}")
 
+    st.subheader("🏢 Escritórios Parceiros Cadastrados")
+    col_atualizar, _ = st.columns([1, 5])
+    with col_atualizar:
+        if st.button("🔄 Atualizar Lista", key="atualizar_lista_escritorios"):
+            st.rerun()
+
+    escritorios_parceiros = carregar_escritorios_parceiros()
+    if escritorios_parceiros:
+        df_escritorios = pd.DataFrame(escritorios_parceiros)
+        colunas_escritorios = ["id", "nome", "email", "telefone", "plano", "status"]
+        for coluna in colunas_escritorios:
+            if coluna not in df_escritorios.columns:
+                df_escritorios[coluna] = "-"
+        st.dataframe(df_escritorios[colunas_escritorios], use_container_width=True, hide_index=True)
+    else:
+        st.info("Nenhum escritório cadastrado até o momento.")
+
     with st.expander("👤 Cadastrar Primeiro Usuário Administrador", expanded=True):
         try:
             escritorios = supabase.table("escritorios").select("id,nome,status").order("nome").execute().data or []
@@ -2011,9 +2046,8 @@ if not st.session_state.logado:
                 realizar_login(usuario, senha)
 else:
     if st.session_state.perfil == "escritorio":
+        render_branding_sidebar()
         with st.sidebar:
-            st.markdown("<h3 style='text-align: center; color: #ffffff; font-family: sans-serif; margin-top: 10px; margin-bottom: 20px;'>📊 V-CONTROLL HUB</h3>", unsafe_allow_html=True)
-
             opcoes_menu = ["Dashboard Geral", "Documentos e Tarefas", "Cadastrar Cliente", "Central de Obrigações", "Base de Clientes", "Financeiro"]
             icones_menu = ["house", "file-earmark-check", "plus-circle", "calendar-check", "people", "currency-dollar"]
             if st.session_state.get("is_admin_master", False):
@@ -2058,8 +2092,8 @@ else:
         elif escolha == "Gestão SaaS":
             render_gestao_saas()
     else:
+        render_branding_sidebar()
         with st.sidebar:
-            st.markdown("<h3 style='text-align: center; color: #ffffff; font-family: sans-serif; margin-top: 10px; margin-bottom: 20px;'>📊 V-CONTROLL HUB</h3>", unsafe_allow_html=True)
             st.write("Conectado como: **CLIENTE**")
 
             opcao_cliente = option_menu(
