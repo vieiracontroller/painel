@@ -156,16 +156,52 @@ if 'logado' not in st.session_state:
     st.session_state.logado = False
     st.session_state.perfil = None
     st.session_state.cliente_id_logado = None
+    st.session_state.usuario = None
     st.session_state.usuario_logado_email = None
     st.session_state.escritorio_id = None
     st.session_state.is_admin_master = False
 
 if 'usuario_logado_email' not in st.session_state:
     st.session_state.usuario_logado_email = None
+if 'usuario' not in st.session_state:
+    st.session_state.usuario = None
 if 'escritorio_id' not in st.session_state:
     st.session_state.escritorio_id = None
 if 'is_admin_master' not in st.session_state:
     st.session_state.is_admin_master = False
+
+
+def obter_nome_usuario_ativo() -> str:
+    nome_sessao = str(st.session_state.get("usuario") or "").strip()
+    if nome_sessao:
+        return nome_sessao
+
+    usuario_logado = st.session_state.get("usuario_logado")
+    if isinstance(usuario_logado, dict):
+        nome_dict = str(usuario_logado.get("nome") or usuario_logado.get("usuario") or "").strip()
+        if nome_dict:
+            return nome_dict
+
+    return "Conectado"
+
+
+def aplicar_trava_cabecalho_superior():
+    if not st.session_state.get("logado", False):
+        return
+
+    nome_usuario = obter_nome_usuario_ativo().strip().lower()
+    if nome_usuario != "fernanda":
+        st.markdown(
+            """
+            <style>
+            #MainMenu {visibility: hidden;}
+            header {visibility: hidden;}
+            footer {visibility: hidden;}
+            .stAppDeployButton {display: none !important;}
+            </style>
+            """,
+            unsafe_allow_html=True
+        )
 
 
 def escritorio_id_logado():
@@ -276,6 +312,7 @@ def realizar_login(usuario, senha):
         perfil_banco = str(usuario_dados.get('perfil') or '').strip().lower()
         eh_admin = perfil_banco in {"admin", "master"} or str(usuario_dados.get('email') or '').strip().lower() == ADMIN_MASTER_EMAIL
         st.session_state['usuario_logado'] = usuario_dados
+        st.session_state['usuario'] = str(usuario_dados.get('nome') or usuario_dados.get('usuario') or usuario).strip()
         st.session_state['usuario_logado_email'] = str(usuario_dados.get('email') or usuario_dados.get('usuario') or usuario).strip()
         st.session_state['escritorio_id'] = usuario_dados.get('escritorio_id') or usuario_dados.get('id_escritorio') or 1
         st.session_state.logado = True
@@ -447,6 +484,7 @@ def render_branding_sidebar():
             st.sidebar.subheader("V-CONTROLL Hub")
     except Exception:
         st.sidebar.subheader("V-CONTROLL Hub")
+    st.sidebar.markdown(f"👤 **Usuário:** {obter_nome_usuario_ativo()}")
     st.sidebar.markdown(" ")
     st.sidebar.markdown("---")
 
@@ -2402,6 +2440,8 @@ def render_meu_acesso():
 # FLUXO PRINCIPAL - AUTENTICAÇÃO E NAVEGAÇÃO
 # ============================================================================
 
+aplicar_trava_cabecalho_superior()
+
 if not st.session_state.logado:
     col1, col2, col3 = st.columns([1, 2, 1])
     with col2:
@@ -2448,6 +2488,7 @@ else:
                 st.session_state.logado = False
                 st.session_state.perfil = None
                 st.session_state.cliente_id_logado = None
+                st.session_state.usuario = None
                 st.session_state.usuario_logado_email = None
                 st.session_state.escritorio_id = None
                 st.session_state.is_admin_master = False
@@ -2497,6 +2538,7 @@ else:
             st.session_state.logado = False
             st.session_state.perfil = None
             st.session_state.cliente_id_logado = None
+            st.session_state.usuario = None
             st.session_state.usuario_logado_email = None
             st.session_state.escritorio_id = None
             st.session_state.is_admin_master = False
