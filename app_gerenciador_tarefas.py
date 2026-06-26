@@ -1942,8 +1942,7 @@ def render_gestao_saas():
                             "email": email_escritorio,
                             "telefone": telefone_escritorio,
                             "plano": plano_escolhido.get("nome", plano_escritorio_label.split(" - ")[0]),
-                            "status": "Ativo",
-                            "data_cadastro": datetime.now().strftime("%Y-%m-%d")
+                            "status": "Ativo"
                         }).execute()
 
                         if not insert_escritorio.data:
@@ -1951,8 +1950,8 @@ def render_gestao_saas():
 
                         st.session_state["novo_escritorio_id"] = insert_escritorio.data[0].get("id")
                         st.success("Escritório cadastrado com sucesso.")
-                    except Exception:
-                        st.info("Não foi possível cadastrar o escritório neste momento.")
+                    except Exception as e:
+                        st.error(f"Erro detalhado: {str(e)}")
 
     with st.expander("👤 Cadastrar Primeiro Usuário Administrador", expanded=True):
         try:
