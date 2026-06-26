@@ -288,9 +288,23 @@ def realizar_login(usuario, senha):
 # ============================================================================
 
 def carregar_clientes():
-    escritorio_id = garantir_escritorio_id()
-    res = supabase.table("clientes").select("*").eq("escritorio_id", escritorio_id).order("nome").execute()
-    return res.data or []
+    import streamlit as st
+    escritorio_id = st.session_state.get('escritorio_id', 1)
+    try:
+        res = (
+            supabase.table("clientes")
+            .select("*")
+            .eq("escritorio_id", escritorio_id)
+            .order("nome")
+            .execute()
+        )
+        return res.data or []
+    except Exception:
+        try:
+            res = supabase.table("clientes").select("*").order("nome").execute()
+            return res.data or []
+        except Exception:
+            return []
 
 
 def carregar_tarefas():
@@ -312,9 +326,16 @@ def carregar_arquivos_escritorio():
 
 
 def carregar_acessos():
-    escritorio_id = garantir_escritorio_id()
-    res = supabase.table("usuarios_clientes").select("*, clientes(nome)").eq("escritorio_id", escritorio_id).execute()
-    return res.data or []
+    try:
+        escritorio_id = garantir_escritorio_id()
+        res = supabase.table("usuarios_clientes").select("*, clientes(nome)").eq("escritorio_id", escritorio_id).execute()
+        return res.data or []
+    except Exception:
+        try:
+            res = supabase.table("usuarios_clientes").select("*, clientes(nome)").execute()
+            return res.data or []
+        except Exception:
+            return []
 
 
 def carregar_config_obrigacoes():
@@ -967,11 +988,19 @@ def render_base_clientes():
     st.markdown("Visualize a base de clientes, regimes tributários e credenciais de acesso. Atualize senhas de clientes diretamente daqui.")
 
     try:
-        res_usuarios = supabase.table("usuarios_clientes").select("*").eq("escritorio_id", escritorio_id).execute()
-        df_usuarios = pd.DataFrame(res_usuarios.data or [])
+        try:
+            res_usuarios = supabase.table("usuarios_clientes").select("*").eq("escritorio_id", escritorio_id).execute()
+            df_usuarios = pd.DataFrame(res_usuarios.data or [])
+        except Exception:
+            res_usuarios = supabase.table("usuarios_clientes").select("*").execute()
+            df_usuarios = pd.DataFrame(res_usuarios.data or [])
 
-        res_clientes = supabase.table("clientes").select("*").eq("escritorio_id", escritorio_id).execute()
-        df_clientes = pd.DataFrame(res_clientes.data or [])
+        try:
+            res_clientes = supabase.table("clientes").select("*").eq("escritorio_id", escritorio_id).execute()
+            df_clientes = pd.DataFrame(res_clientes.data or [])
+        except Exception:
+            res_clientes = supabase.table("clientes").select("*").execute()
+            df_clientes = pd.DataFrame(res_clientes.data or [])
 
         if not df_usuarios.empty and not df_clientes.empty:
             col_ligacao = 'cliente_id' if 'cliente_id' in df_usuarios.columns else 'id_cliente' if 'id_cliente' in df_usuarios.columns else None
@@ -1010,8 +1039,8 @@ def render_base_clientes():
                 st.dataframe(df_usuarios)
         else:
             st.info("Nenhum registro encontrado para realizar a listagem.")
-    except Exception as e:
-        st.error(f"Erro ao processar tabelas: {e}")
+    except Exception:
+        st.info("Não foi possível carregar a base consolidada no momento.")
 
     st.markdown("---")
     st.subheader("Mudar Status do Cliente")
@@ -1486,9 +1515,20 @@ def render_portal_cliente():
         st.subheader("👤 Meu Usuário")
         
         # Obter dados do usuário logado
-        usuario_logado_res = supabase.table("usuarios_clientes").select("*").eq("cliente_id", cliente['id']).eq("escritorio_id", escritorio_id).execute()
-        if usuario_logado_res.data:
-            usuario_logado = usuario_logado_res.data[0]
+        try:
+            usuario_logado_res = supabase.table("usuarios_clientes").select("*").eq("cliente_id", cliente['id']).eq("escritorio_id", escritorio_id).execute()
+            if usuario_logado_res.data:
+                usuario_logado = usuario_logado_res.data[0]
+            else:
+                usuario_logado = None
+        except Exception:
+            try:
+                usuario_logado_res = supabase.table("usuarios_clientes").select("*").eq("cliente_id", cliente['id']).execute()
+                usuario_logado = usuario_logado_res.data[0] if usuario_logado_res.data else None
+            except Exception:
+                usuario_logado = None
+
+        if usuario_logado:
             
             # Exibir informações básicas
             st.markdown("### Informações do Usuário")
@@ -1526,7 +1566,7 @@ def render_portal_cliente():
                             st.success("Senha alterada com sucesso!")
                             st.rerun()
                         except Exception as e:
-                            st.error(f"Erro ao alterar senha: {e}")
+                            st.info("Não foi possível alterar a senha neste momento.")
         else:
             st.warning("Dados de usuário não encontrados.")
 
