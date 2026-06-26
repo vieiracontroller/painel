@@ -76,14 +76,28 @@ st.markdown(
     /* Esconde o menu principal de edição do Streamlit */
     #MainMenu {visibility: hidden !important;}
 
-    /* Esconde o botão de Deploy e o botão de Gerir app (seletor específico) */
-    .stAppDeployButton, [data-testid="stAppDeployButton"] {
+    /* Esconde o botão de Deploy / Gerir app (seletores de Cloud e app) */
+    .stAppDeployButton,
+    [data-testid="stAppDeployButton"],
+    [data-testid="stStatusWidget"],
+    [data-testid="manage-app-button"] {
         display: none !important;
     }
 
-    /* Garante que o menu lateral (sidebar) e seu botão de controle não sejam escondidos */
-    section[data-testid="stSidebar"] {display: block !important;}
-    button[aria-label="Toggle navigation"] {display: block !important;}
+    /* Menu lateral fixo e sempre visível */
+    section[data-testid="stSidebar"] {
+        display: block !important;
+        visibility: visible !important;
+        transform: translateX(0) !important;
+    }
+
+    /* Impede recolhimento da sidebar via botões de toggle */
+    [data-testid="collapsedControl"],
+    [data-testid="stSidebarCollapseButton"],
+    button[aria-label="Toggle navigation"],
+    button[aria-label="Close sidebar"] {
+        display: none !important;
+    }
     </style>
     """,
     unsafe_allow_html=True
