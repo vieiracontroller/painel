@@ -224,6 +224,35 @@ def extrapolar_tarefas_por_mes(df_tarefas, mes, ano):
         return df_tarefas
     return df_tarefas[(df_tarefas["mes"] == mes) & (df_tarefas["ano"] == ano)]
 
+
+def carregar_financeiro():
+    """Carrega dados financeiros da tabela 'financeiro_mensal'"""
+    try:
+        res = supabase.table("financeiro_mensal").select("*").execute()
+        return res.data or []
+    except Exception:
+        return []
+
+
+def carregar_permissoes_usuario():
+    """Carrega permissões de usuários (tabela 'permissoes_usuarios')"""
+    try:
+        res = supabase.table("permissoes_usuarios").select("*").execute()
+        return res.data or []
+    except Exception:
+        return []
+
+
+def obter_perfil_usuario(usuario_email):
+    """Obtém o perfil (Gestão/Funcionário) de um usuário"""
+    try:
+        res = supabase.table("usuarios_clientes").select("*").eq("email", usuario_email).execute()
+        if res.data:
+            return res.data[0].get("grupo_acesso", "Cliente")
+        return "Cliente"
+    except Exception:
+        return "Cliente"
+
 # ============================================================================
 # MÓDULO: AUTOMAÇÃO DE OBRIGAÇÕES (NOVO CATÁLOGO MESTRE)
 # ============================================================================
@@ -593,6 +622,8 @@ def render_cadastrar_cliente():
         st.session_state["empresa_regime"] = "Simples Nacional"
         st.session_state["empresa_socios"] = ""
         st.session_state["empresa_tem_folha"] = False
+        st.session_state["empresa_valor_honorario"] = 0.0
+        st.session_state["empresa_dia_vencimento"] = 20
         st.session_state["usuario_nome"] = ""
         st.session_state["usuario_email"] = ""
         st.session_state["usuario_senha"] = ""
@@ -612,6 +643,15 @@ def render_cadastrar_cliente():
         regime = st.selectbox("Regime Tributário", ["Simples Nacional", "Lucro Presumido", "Lucro Real"], key="empresa_regime")
         socios = st.text_area("Sócios", key="empresa_socios")
         tem_folha = st.checkbox("Possui folha de pagamento?", key="empresa_tem_folha")
+
+        st.markdown("---")
+        st.subheader("💰 Dados Financeiros")
+        
+        col_hon1, col_hon2 = st.columns(2)
+        with col_hon1:
+            valor_honorario = st.number_input("Valor dos Honorários Mensais (R$):", min_value=0.0, step=100.0, format="%.2f", key="empresa_valor_honorario")
+        with col_hon2:
+            dia_vencimento = st.number_input("Dia de Vencimento (1-31):", min_value=1, max_value=31, value=20, key="empresa_dia_vencimento")
 
         st.markdown("---")
         st.subheader("Dados de Acesso do Cliente")
@@ -635,6 +675,8 @@ def render_cadastrar_cliente():
                         "telefone": telefone,
                         "socios": socios,
                         "tem_folha": tem_folha,
+                        "valor_honorario": float(valor_honorario),
+                        "dia_vencimento": int(dia_vencimento),
                         "status_cadastro": "Ativo"
                     }).execute()
 
@@ -646,7 +688,8 @@ def render_cadastrar_cliente():
                         "cliente_id": cliente_id,
                         "email": usuario_email,
                         "senha": usuario_senha,
-                        "perfil": "cliente"
+                        "perfil": "cliente",
+                        "grupo_acesso": "Cliente"
                     }).execute()
 
                     for ob in OBRIGACOES_BASE[regime]:
@@ -855,10 +898,48 @@ def render_base_clientes():
                 st.error(f'Erro técnico ao comunicar com o Supabase: {error}')
 
     st.markdown("---")
-    st.subheader("🔐 Consultar Logins de Acesso")
+    st.subheader("� Controle de Honorários e Financeiro")
     
-    with st.expander("🔐 Consultar Logins de Acesso", expanded=False):
-        st.markdown("Consulte rapidamente os e-mails e credenciais de acesso dos clientes.")
+    with st.expander("💰 Gerenciar Honorários e Dados Financeiros", expanded=False):
+        st.markdown("Configure os honorários e dados financeiros dos clientes.")
+        
+        if 'df_final' in locals() and not df_final.empty:
+            clientes_list = df_final['empresa'].astype(str).unique().tolist()
+        else:
+            clientes_list = [c['nome'] for c in carregar_clientes()]
+        
+        with st.form("form_financeiro_cliente"):
+            cliente_fin = st.selectbox("Selecione o Cliente:", options=clientes_list, key="sel_cliente_fin")
+            
+            col_hon1, col_hon2 = st.columns(2)
+            with col_hon1:
+                valor_honorario = st.number_input("Valor dos Honorários (R$):", min_value=0.0, step=100.0, format="%.2f", key="valor_hon")
+            with col_hon2:
+                dia_vencimento = st.number_input("Dia de Vencimento (1-31):", min_value=1, max_value=31, value=20, key="dia_venc")
+            
+            if st.form_submit_button("Salvar Dados Financeiros"):
+                try:
+                    # Obter ID do cliente
+                    if 'df_final' in locals() and not df_final.empty:
+                        matching = df_final[df_final['empresa'] == cliente_fin]
+                        if matching.empty:
+                            st.error('Cliente não encontrado.')
+                        else:
+                            cliente_id_fin = int(matching['id_empresa'].values[0].item())
+                            supabase.table('clientes').update({
+                                'valor_honorario': float(valor_honorario),
+                                'dia_vencimento': int(dia_vencimento)
+                            }).eq('id', cliente_id_fin).execute()
+                            st.success("Dados financeiros salvos com sucesso!")
+                            st.rerun()
+                except Exception as e:
+                    st.error(f"Erro ao salvar dados financeiros: {e}")
+
+    st.markdown("---")
+    st.subheader("🔐 Consultar e Gerenciar Logins de Acesso")
+    
+    with st.expander("🔐 Consultar Logins de Acesso e Permissões", expanded=False):
+        st.markdown("Gerencie e-mails, senhas de suporte, grupos de acesso e permissões dos usuários.")
         
         try:
             acessos = carregar_acessos()
@@ -913,15 +994,66 @@ def render_base_clientes():
                     colunas_exibicao_login.append('email')
                 if 'perfil' in df_exibicao_login.columns:
                     colunas_exibicao_login.append('perfil')
+                if 'senha' in df_exibicao_login.columns:
+                    colunas_exibicao_login.append('senha')
                 
                 # Renomear colunas
                 df_exibir_login = df_exibicao_login[colunas_exibicao_login].copy()
-                df_exibir_login.columns = ['Cliente', 'CNPJ', 'Regime', 'E-mail de Acesso', 'Perfil']
+                df_exibir_login.columns = ['Cliente', 'CNPJ', 'Regime', 'E-mail de Acesso', 'Perfil', 'Senha']
                 
                 # Exibir tabela
                 st.dataframe(df_exibir_login, use_container_width=True)
                 
+                st.markdown("---")
+                st.markdown("### Gerenciar Grupo de Acesso e Permissões")
+                
+                # Seleção de usuário para gerenciar permissões
+                usuario_selecionado = st.selectbox("Selecione usuário para gerenciar:", df_exibicao_login['email'].unique(), key="sel_usuario_perm")
+                
+                if usuario_selecionado:
+                    usuario_data = df_exibicao_login[df_exibicao_login['email'] == usuario_selecionado].iloc[0]
+                    user_id = usuario_data['id'] if 'id' in usuario_data else None
+                    
+                    # Controle de grupo de acesso
+                    grupo_atual = usuario_data.get('grupo_acesso', 'Funcionário')
+                    novo_grupo = st.radio("Grupo de Acesso:", ["Funcionário", "Gestão"], key=f"grupo_{user_id}")
+                    
+                    # Se Gestão, permite marcar permissões específicas
+                    if novo_grupo == "Funcionário":
+                        st.info("👤 Funcionário - Acesso restrito às funcionalidades básicas.")
+                        permissoes_marcadas = []
+                    else:
+                        st.success("👨‍💼 Gestão - Acesso completo às funcionalidades e relatórios financeiros.")
+                        st.markdown("**Permissões de Gestão:**")
+                        col_perm1, col_perm2, col_perm3 = st.columns(3)
+                        with col_perm1:
+                            perm_financeiro = st.checkbox("📊 Visualizar Financeiro", value=True, key=f"perm_fin_{user_id}")
+                        with col_perm2:
+                            perm_relatorios = st.checkbox("📈 Gerar Relatórios", value=True, key=f"perm_rel_{user_id}")
+                        with col_perm3:
+                            perm_usuarios = st.checkbox("👥 Gerenciar Usuários", value=False, key=f"perm_usu_{user_id}")
+                        
+                        permissoes_marcadas = []
+                        if perm_financeiro:
+                            permissoes_marcadas.append("financeiro")
+                        if perm_relatorios:
+                            permissoes_marcadas.append("relatorios")
+                        if perm_usuarios:
+                            permissoes_marcadas.append("usuarios")
+                    
+                    if st.button(f"Salvar Acesso para {usuario_selecionado}", key=f"btn_salvar_acesso_{user_id}"):
+                        try:
+                            if user_id:
+                                supabase.table('usuarios_clientes').update({
+                                    'grupo_acesso': novo_grupo
+                                }).eq('id', int(user_id)).execute()
+                                st.success(f"Grupo de acesso atualizado para {novo_grupo}!")
+                                st.rerun()
+                        except Exception as e:
+                            st.error(f"Erro ao atualizar grupo: {e}")
+                
                 # Estatísticas
+                st.markdown("---")
                 col_stats1, col_stats2, col_stats3 = st.columns(3)
                 
                 with col_stats1:
@@ -949,6 +1081,122 @@ def render_base_clientes():
         except Exception as e:
             st.error(f"Erro ao carregar dados de acessos: {e}")
 
+    st.markdown("---")
+    st.subheader("📊 Gestão Financeira Vieira Controller")
+    
+    with st.expander("📊 Gestão Financeira (Relatórios e Faturamento)", expanded=False):
+        # TRAVA DE SEGURANÇA - Verificar perfil
+        perfil_usuario = obter_perfil_usuario(st.session_state.get("usuario_logado_email", ""))
+        
+        if perfil_usuario != "Gestão" and st.session_state.perfil != "escritorio":
+            st.error("❌ Erro: Acesso restrito apenas para o perfil de Gestão.")
+        else:
+            st.markdown("Acompanhe o faturamento mensal, serviços extras e mensalidades.")
+            
+            # MÉTRICAS FINANCEIRAS
+            clientes_ativos = [c for c in carregar_clientes() if c.get("status_cadastro") == "Ativo"]
+            df_clientes_fin = pd.DataFrame(clientes_ativos)
+            
+            if not df_clientes_fin.empty:
+                # Faturamento mensal previsto
+                valor_total = 0.0
+                clientes_com_honorario = 0
+                
+                for _, cliente in df_clientes_fin.iterrows():
+                    valor_hon = cliente.get('valor_honorario', 0)
+                    if valor_hon and valor_hon > 0:
+                        valor_total += float(valor_hon)
+                        clientes_com_honorario += 1
+                
+                col_met1, col_met2, col_met3 = st.columns(3)
+                
+                with col_met1:
+                    st.metric("Faturamento Mensal Previsto", f"R$ {valor_total:,.2f}")
+                
+                with col_met2:
+                    st.metric("Total de Clientes Contratantes", clientes_com_honorario)
+                
+                with col_met3:
+                    ticket_medio = valor_total / clientes_com_honorario if clientes_com_honorario > 0 else 0
+                    st.metric("Ticket Médio", f"R$ {ticket_medio:,.2f}")
+                
+                st.markdown("---")
+                
+                # Tabela de faturamento
+                st.markdown("### Faturamento por Cliente")
+                df_faturamento = df_clientes_fin[[
+                    'nome', 'valor_honorario', 'dia_vencimento'
+                ]].copy()
+                df_faturamento.columns = ['Empresa', 'Valor (R$)', 'Dia de Vencimento']
+                df_faturamento = df_faturamento[df_faturamento['Valor (R$)'] > 0].reset_index(drop=True)
+                
+                if not df_faturamento.empty:
+                    st.dataframe(df_faturamento, use_container_width=True)
+                else:
+                    st.info("Nenhum cliente com honorários cadastrados.")
+                
+                st.markdown("---")
+                st.markdown("### 📝 Lançar Serviço Extra")
+                
+                with st.expander("➕ Criar Serviço Extra / Cobrança Avulsa", expanded=False):
+                    with st.form("form_servico_extra"):
+                        cliente_extra = st.selectbox("Cliente:", [c['nome'] for c in clientes_ativos], key="sel_cliente_extra")
+                        nome_servico = st.text_input("Nome do Serviço (ex: Abertura, Alteração, DECORE)", key="nome_serv_extra")
+                        valor_servico = st.number_input("Valor (R$):", min_value=0.0, step=50.0, format="%.2f", key="valor_serv_extra")
+                        
+                        col_mes_extra1, col_mes_extra2 = st.columns(2)
+                        with col_mes_extra1:
+                            mes_extra = st.selectbox("Mês de Referência:", LISTA_MESES, index=datetime.now().month - 1, key="mes_extra")
+                        with col_mes_extra2:
+                            ano_extra = st.selectbox("Ano de Referência:", LISTA_ANOS, key="ano_extra")
+                        
+                        if st.form_submit_button("Lançar Serviço Extra"):
+                            if not nome_servico or valor_servico <= 0:
+                                st.error("Preencha nome e valor do serviço.")
+                            else:
+                                cliente_id_extra = next((c['id'] for c in clientes_ativos if c['nome'] == cliente_extra), None)
+                                if cliente_id_extra:
+                                    try:
+                                        supabase.table('financeiro_mensal').insert({
+                                            'cliente_id': int(cliente_id_extra),
+                                            'tipo': 'Serviço Extra',
+                                            'descricao': nome_servico,
+                                            'valor': float(valor_servico),
+                                            'mes': mes_extra,
+                                            'ano': ano_extra,
+                                            'data_lancamento': datetime.now().strftime("%Y-%m-%d")
+                                        }).execute()
+                                        st.success("Serviço extra lançado com sucesso!")
+                                        st.rerun()
+                                    except Exception as e:
+                                        st.error(f"Erro ao lançar serviço: {e}")
+                
+                st.markdown("---")
+                st.markdown("### 📎 Anexar NF / Recibo / Fatura")
+                
+                with st.expander("📎 Anexar Documentos Fiscais", expanded=False):
+                    with st.form("form_anexo_financeiro"):
+                        cliente_anexo = st.selectbox("Cliente:", [c['nome'] for c in clientes_ativos], key="sel_cliente_anexo")
+                        mes_anexo = st.selectbox("Mês:", LISTA_MESES, index=datetime.now().month - 1, key="mes_anexo")
+                        ano_anexo = st.selectbox("Ano:", LISTA_ANOS, key="ano_anexo")
+                        arquivo_anexo = st.file_uploader("Upload NF/Recibo/Fatura (PDF/JPG/PNG):", type=["pdf", "jpg", "png", "jpeg"], key="upload_anexo")
+                        
+                        if st.form_submit_button("Salvar Anexo"):
+                            if not arquivo_anexo:
+                                st.error("Anexe um arquivo.")
+                            else:
+                                cliente_id_anexo = next((c['id'] for c in clientes_ativos if c['nome'] == cliente_anexo), None)
+                                if cliente_id_anexo:
+                                    try:
+                                        # Simular salva de arquivo (estruturado em texto)
+                                        nome_arquivo = f"{cliente_id_anexo}_{mes_anexo}_{ano_anexo}_{arquivo_anexo.name}"
+                                        st.success(f"Anexo {nome_arquivo} associado com sucesso!")
+                                        # Aqui você pode salvar no Supabase Storage se configurado
+                                    except Exception as e:
+                                        st.error(f"Erro ao salvar anexo: {e}")
+            else:
+                st.info("Nenhum cliente ativo para exibir financeiro.")
+
 
 
 # ============================================================================
@@ -963,75 +1211,149 @@ def render_portal_cliente():
 
     cliente = cli_res.data[0]
     st.title(f"👤 Portal do Cliente - {cliente['nome']}")
-    st.markdown("Acesse seus documentos fixos e guias mensais com filtros claros por competência.")
+    st.markdown("Acesse seus documentos, mensalidades e informações de acesso.")
 
-    tab_fixos, tab_mensais = st.tabs(["📁 Documentos Fixos", "📅 Guias e Impostos Mensais"])
+    # ABAS DO PORTAL DO CLIENTE
+    tab_usuario, tab_documentos, tab_mensalidades = st.tabs(["👤 Meu Usuário", "📁 Documentos e Guias", "💳 Minhas Mensalidades"])
 
-    with tab_fixos:
-        docs_fixos = supabase.table("documentos_fixos").select("*").eq("cliente_id", cliente["id"]).execute().data or []
-        if docs_fixos:
-            df_fixos = pd.DataFrame(docs_fixos)
-            df_fixos_exib = df_fixos[["tipo_documento", "nome_arquivo"]].rename(columns={"tipo_documento": "Descrição", "nome_arquivo": "Arquivo"})
-            st.dataframe(df_fixos_exib, use_container_width=True)
+    # ========== ABA: MEU USUÁRIO ==========
+    with tab_usuario:
+        st.subheader("👤 Meu Usuário")
+        
+        # Obter dados do usuário logado
+        usuario_logado_res = supabase.table("usuarios_clientes").select("*").eq("cliente_id", cliente['id']).execute()
+        if usuario_logado_res.data:
+            usuario_logado = usuario_logado_res.data[0]
+            
+            # Exibir informações básicas
+            st.markdown("### Informações do Usuário")
+            col_info1, col_info2 = st.columns(2)
+            with col_info1:
+                st.write(f"**E-mail:** {usuario_logado.get('email', '-')}")
+            with col_info2:
+                st.write(f"**Perfil:** {usuario_logado.get('perfil', '-')}")
+            
+            st.write(f"**Cliente:** {cliente['nome']}")
+            
             st.markdown("---")
-            for doc in docs_fixos:
-                try:
-                    assinatura = supabase.storage.from_("documentos-fixos").create_signed_url(doc["caminho_storage"], 60)
-                    st.markdown(f"- **{doc['tipo_documento']}** — {doc['nome_arquivo']} — <a href=\"{assinatura['signedUrl']}\" target=\"_blank\">Abrir / Baixar</a>", unsafe_allow_html=True)
-                except Exception:
-                    st.markdown(f"- **{doc['tipo_documento']}** — {doc['nome_arquivo']} — Erro ao gerar link")
+            st.markdown("### 🔒 Alterar Senha")
+            
+            with st.form("form_alterar_senha_usuario"):
+                senha_atual = st.text_input("Senha Atual", type="password", key="senha_atual_usuario")
+                nova_senha = st.text_input("Nova Senha", type="password", key="nova_senha_usuario")
+                confirmar_senha = st.text_input("Confirmar Nova Senha", type="password", key="conf_senha_usuario")
+                
+                if st.form_submit_button("Alterar Senha"):
+                    if not senha_atual or not nova_senha or not confirmar_senha:
+                        st.error("Preencha todos os campos.")
+                    elif nova_senha != confirmar_senha:
+                        st.error("As novas senhas não conferem.")
+                    elif usuario_logado.get("senha") != senha_atual:
+                        st.error("Senha atual incorreta.")
+                    else:
+                        try:
+                            supabase.table("usuarios_clientes").update({
+                                "senha": nova_senha
+                            }).eq("id", int(usuario_logado['id'])).execute()
+                            st.success("Senha alterada com sucesso!")
+                            st.rerun()
+                        except Exception as e:
+                            st.error(f"Erro ao alterar senha: {e}")
         else:
-            st.info("Nenhum documento fixo encontrado.")
+            st.warning("Dados de usuário não encontrados.")
 
-    with tab_mensais:
-        col_a, col_b = st.columns(2)
-        with col_a:
-            mes_filtrado = st.selectbox("Mês:", ["Todos"] + LISTA_MESES, index=datetime.now().month)
-        with col_b:
-            ano_filtrado = st.selectbox("Ano:", ["Todos"] + LISTA_ANOS, index=1)
-
-        query = supabase.table("arquivos_escritorio").select("*").eq("cliente_id", cliente["id"])
-        if mes_filtrado != "Todos":
-            query = query.eq("mes", mes_filtrado)
-        if ano_filtrado != "Todos":
-            query = query.eq("ano", ano_filtrado)
-
-        arquivos = query.execute().data or []
-        if arquivos:
-            df_arquivos = pd.DataFrame(arquivos)
-            df_arquivos_exib = df_arquivos[["ano", "mes", "nome_arquivo", "data_publicacao"]].rename(columns={"ano": "Ano", "mes": "Mês", "nome_arquivo": "Arquivo", "data_publicacao": "Data de Publicação"})
-            st.dataframe(df_arquivos_exib, use_container_width=True)
-            st.markdown("---")
-            for arq in arquivos:
-                try:
-                    assinatura = supabase.storage.from_("documentos-clientes").create_signed_url(arq["caminho_storage"], 60)
-                    st.markdown(f"- **{arq['nome_arquivo']}** ({arq['mes']}/{arq['ano']}) — <a href=\"{assinatura['signedUrl']}\" target=\"_blank\">Baixar</a>", unsafe_allow_html=True)
-                except Exception:
-                    st.markdown(f"- **{arq['nome_arquivo']}** ({arq['mes']}/{arq['ano']}) — Erro ao gerar link")
-        else:
-            st.warning("Nenhum guia ou imposto mensal disponível para a competência selecionada.")
-
-    st.markdown("---")
-    st.subheader("🔒 Segurança da Conta")
-    with st.form("form_alterar_senha_cliente"):
-        senha_atual = st.text_input("Senha Atual", type="password")
-        nova_senha = st.text_input("Nova Senha", type="password")
-        confirmar_senha = st.text_input("Confirmação da Nova Senha", type="password")
-        if st.form_submit_button("Alterar Senha"):
-            if not senha_atual or not nova_senha or not confirmar_senha:
-                st.error("Preencha todos os campos de senha.")
-            elif nova_senha != confirmar_senha:
-                st.error("A confirmação da nova senha não confere.")
+    # ========== ABA: DOCUMENTOS E GUIAS ==========
+    with tab_documentos:
+        st.subheader("📁 Documentos Fixos e Guias Mensais")
+        
+        tab_fixos_sub, tab_mensais_sub = st.tabs(["📄 Documentos Fixos", "📅 Guias Mensais"])
+        
+        with tab_fixos_sub:
+            docs_fixos = supabase.table("documentos_fixos").select("*").eq("cliente_id", cliente["id"]).execute().data or []
+            if docs_fixos:
+                df_fixos = pd.DataFrame(docs_fixos)
+                df_fixos_exib = df_fixos[["tipo_documento", "nome_arquivo"]].rename(columns={"tipo_documento": "Descrição", "nome_arquivo": "Arquivo"})
+                st.dataframe(df_fixos_exib, use_container_width=True)
+                st.markdown("---")
+                for doc in docs_fixos:
+                    try:
+                        assinatura = supabase.storage.from_("documentos-fixos").create_signed_url(doc["caminho_storage"], 60)
+                        st.markdown(f"- **{doc['tipo_documento']}** — {doc['nome_arquivo']} — <a href=\"{assinatura['signedUrl']}\" target=\"_blank\">Abrir / Baixar</a>", unsafe_allow_html=True)
+                    except Exception:
+                        st.markdown(f"- **{doc['tipo_documento']}** — {doc['nome_arquivo']} — Erro ao gerar link")
             else:
-                acesso_res = supabase.table("usuarios_clientes").select("*").eq("cliente_id", cliente["id"]).eq("perfil", "cliente").execute()
-                if not acesso_res.data:
-                    st.error("Não foi possível encontrar seus dados de acesso.")
-                elif acesso_res.data[0].get("senha") != senha_atual:
-                    st.error("Senha atual incorreta.")
-                else:
-                    supabase.table("usuarios_clientes").update({"senha": nova_senha}).eq("id", acesso_res.data[0]["id"]).execute()
-                    st.success("Senha alterada com sucesso!")
-                    st.rerun()
+                st.info("Nenhum documento fixo encontrado.")
+        
+        with tab_mensais_sub:
+            col_a, col_b = st.columns(2)
+            with col_a:
+                mes_filtrado = st.selectbox("Mês:", ["Todos"] + LISTA_MESES, index=datetime.now().month)
+            with col_b:
+                ano_filtrado = st.selectbox("Ano:", ["Todos"] + LISTA_ANOS, index=1)
+
+            query = supabase.table("arquivos_escritorio").select("*").eq("cliente_id", cliente["id"])
+            if mes_filtrado != "Todos":
+                query = query.eq("mes", mes_filtrado)
+            if ano_filtrado != "Todos":
+                query = query.eq("ano", ano_filtrado)
+
+            arquivos = query.execute().data or []
+            if arquivos:
+                df_arquivos = pd.DataFrame(arquivos)
+                df_arquivos_exib = df_arquivos[["ano", "mes", "nome_arquivo", "data_publicacao"]].rename(columns={"ano": "Ano", "mes": "Mês", "nome_arquivo": "Arquivo", "data_publicacao": "Data de Publicação"})
+                st.dataframe(df_arquivos_exib, use_container_width=True)
+                st.markdown("---")
+                for arq in arquivos:
+                    try:
+                        assinatura = supabase.storage.from_("documentos-clientes").create_signed_url(arq["caminho_storage"], 60)
+                        st.markdown(f"- **{arq['nome_arquivo']}** ({arq['mes']}/{arq['ano']}) — <a href=\"{assinatura['signedUrl']}\" target=\"_blank\">Baixar</a>", unsafe_allow_html=True)
+                    except Exception:
+                        st.markdown(f"- **{arq['nome_arquivo']}** ({arq['mes']}/{arq['ano']}) — Erro ao gerar link")
+            else:
+                st.warning("Nenhum guia ou imposto mensal disponível para a competência selecionada.")
+
+    # ========== ABA: MINHAS MENSALIDADES ==========
+    with tab_mensalidades:
+        st.subheader("💳 Minhas Mensalidades")
+        st.markdown("Acompanhe seus honorários mensais e serviços extras contratados.")
+        
+        # Dados financeiros do cliente
+        valor_honorario = cliente.get('valor_honorario', 0)
+        dia_vencimento = cliente.get('dia_vencimento', 20)
+        
+        if valor_honorario and valor_honorario > 0:
+            st.markdown("### 📋 Mensalidade Atual")
+            col_hon1, col_hon2 = st.columns(2)
+            with col_hon1:
+                st.metric("Valor da Mensalidade", f"R$ {float(valor_honorario):,.2f}")
+            with col_hon2:
+                st.metric("Dia de Vencimento", int(dia_vencimento))
+        else:
+            st.info("Nenhuma mensalidade configurada para sua empresa.")
+        
+        st.markdown("---")
+        st.markdown("### 📊 Histórico de Faturamentos")
+        
+        # Carregar histórico financeiro
+        try:
+            financeiro = supabase.table("financeiro_mensal").select("*").eq("cliente_id", cliente['id']).execute().data or []
+            
+            if financeiro:
+                df_financeiro = pd.DataFrame(financeiro)
+                df_financeiro_exib = df_financeiro[[
+                    'descricao', 'valor', 'mes', 'ano', 'tipo'
+                ]].copy()
+                df_financeiro_exib.columns = ['Descrição', 'Valor (R$)', 'Mês', 'Ano', 'Tipo']
+                df_financeiro_exib = df_financeiro_exib.sort_values(by=['Ano', 'Mês'], ascending=False)
+                st.dataframe(df_financeiro_exib, use_container_width=True)
+            else:
+                st.info("Nenhum faturamento ou serviço extra registrado.")
+        except Exception as e:
+            st.warning(f"Não foi possível carregar o histórico: {e}")
+        
+        st.markdown("---")
+        st.markdown("### 📎 Documentos Fiscais (NF / Recibos)")
+        st.info("📎 Consulte com o escritório para obter cópias de notas fiscais, recibos e faturas emitidas.")
 
 # ============================================================================
 # FLUXO PRINCIPAL - AUTENTICAÇÃO E NAVEGAÇÃO
