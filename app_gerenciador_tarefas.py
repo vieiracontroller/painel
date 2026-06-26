@@ -66,37 +66,12 @@ st.markdown(f"""
 </style>
 """, unsafe_allow_html=True)
 
-# Oculta globalmente menu nativo do Streamlit em qualquer estado da aplicacao.
+# Oculta apenas o botão de Gerir app sem afetar navegação.
 st.markdown(
     """
     <style>
-    /* Esconde o menu de opções (ícone de 3 pontinhos) e o botão Share */
-    [data-testid="stToolbar"] {visibility: hidden !important;}
-
-    /* Esconde o menu principal de edição do Streamlit */
-    #MainMenu {visibility: hidden !important;}
-
-    /* Esconde o botão de Deploy / Gerir app (seletores de Cloud e app) */
-    .stAppDeployButton,
-    [data-testid="stAppDeployButton"],
-    [data-testid="stStatusWidget"],
-    [data-testid="manage-app-button"] {
+    [data-testid="stAppDeployButton"] {
         display: none !important;
-    }
-
-    /* Mantém sidebar visível sem quebrar navegação */
-    section[data-testid="stSidebar"] {
-        display: block !important;
-        visibility: visible !important;
-    }
-
-    /* Garante que os controles de sidebar apareçam */
-    [data-testid="collapsedControl"],
-    [data-testid="stSidebarCollapseButton"],
-    button[aria-label="Toggle navigation"],
-    button[aria-label="Close sidebar"] {
-        display: block !important;
-        visibility: visible !important;
     }
     </style>
     """,
