@@ -1,6 +1,7 @@
 import streamlit as st
 import pandas as pd
 import plotly.express as px
+import os
 from datetime import datetime
 from calendar import monthrange
 from supabase import create_client, Client
@@ -2396,7 +2397,15 @@ def render_meu_acesso():
 if not st.session_state.logado:
     col1, col2, col3 = st.columns([1, 2, 1])
     with col2:
-        st.image("logo1.png", width=280)
+        try:
+            if os.path.exists("logo1.png"):
+                st.image("logo1.png", width=280)
+            elif os.path.exists("logo1.png.png"):
+                st.image("logo1.png.png", width=280)
+            else:
+                st.subheader("V-CONTROLL Hub")
+        except Exception:
+            st.subheader("V-CONTROLL Hub")
         with st.form("form_login"):
             usuario = st.text_input("Usuário ou E-mail")
             senha = st.text_input("Senha", type="password")
