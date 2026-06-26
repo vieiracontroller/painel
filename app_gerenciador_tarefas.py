@@ -84,19 +84,19 @@ st.markdown(
         display: none !important;
     }
 
-    /* Menu lateral fixo e sempre visível */
+    /* Mantém sidebar visível sem quebrar navegação */
     section[data-testid="stSidebar"] {
         display: block !important;
         visibility: visible !important;
-        transform: translateX(0) !important;
     }
 
-    /* Impede recolhimento da sidebar via botões de toggle */
+    /* Garante que os controles de sidebar apareçam */
     [data-testid="collapsedControl"],
     [data-testid="stSidebarCollapseButton"],
     button[aria-label="Toggle navigation"],
     button[aria-label="Close sidebar"] {
-        display: none !important;
+        display: block !important;
+        visibility: visible !important;
     }
     </style>
     """,
