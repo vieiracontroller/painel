@@ -70,15 +70,26 @@ st.markdown(f"""
 st.markdown(
     """
     <style>
-    /* Esconde o menu de compartilhamento e edição no topo direito */
-    #MainMenu {visibility: hidden;}
-    header {visibility: hidden;}
+    /* Esconde o menu de opções (ícone de três pontinhos no canto direito) */
+    [data-testid="stToolbar"] {visibility: hidden;}
 
-    /* Esconde o botão de deploy/código do Streamlit no canto inferior */
+    /* Esconde o botão de Deploy do Streamlit no canto inferior */
     .stAppDeployButton {display: none !important;}
 
-    /* Garante que o ícone do menu lateral não seja afetado pelo hide do header */
-    button[aria-label="Toggle navigation"] {display: block !important;}
+    /* Esconde a barra de menu principal que contém Share/Edit */
+    #MainMenu {visibility: hidden;}
+
+    /* Oculta especificamente o cabeçalho, mas garante que o botão do menu lateral fique visível */
+    header {visibility: hidden !important;}
+
+    /* Força o botão de menu lateral (sidebar) a ficar visível */
+    [data-testid="stSidebarCollapseButton"] {
+        visibility: visible !important;
+        position: fixed !important;
+        top: 10px !important;
+        left: 10px !important;
+        z-index: 9999 !important;
+    }
     </style>
     """,
     unsafe_allow_html=True
