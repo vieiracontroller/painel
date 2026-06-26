@@ -2,7 +2,7 @@ import streamlit as st
 import pandas as pd
 import plotly.express as px
 import os
-import time
+from PIL import Image
 from datetime import datetime
 from calendar import monthrange
 from supabase import create_client, Client
@@ -441,11 +441,12 @@ def obter_perfil_usuario(usuario_email):
 def render_branding_sidebar():
     try:
         if os.path.exists("logo.png"):
-            _cache_buster_sidebar = int(time.time())
-            with open("logo.png", "rb") as logo_file:
-                st.sidebar.image(logo_file.read(), use_container_width=True)
+            img_sidebar = Image.open("logo.png")
+            st.sidebar.image(img_sidebar, use_container_width=True)
+        else:
+            st.sidebar.subheader("V-CONTROLL Hub")
     except Exception:
-        pass
+        st.sidebar.subheader("V-CONTROLL Hub")
     st.sidebar.markdown(" ")
     st.sidebar.markdown("---")
 
@@ -2406,11 +2407,12 @@ if not st.session_state.logado:
     with col2:
         try:
             if os.path.exists("logo.png"):
-                _cache_buster_login = int(time.time())
-                with open("logo.png", "rb") as logo_file:
-                    st.image(logo_file.read(), width=280)
+                img = Image.open("logo.png")
+                st.image(img, width=280)
+            else:
+                st.subheader("V-CONTROLL Hub")
         except Exception:
-            pass
+            st.subheader("V-CONTROLL Hub")
         with st.form("form_login"):
             usuario = st.text_input("Usuário ou E-mail")
             senha = st.text_input("Senha", type="password")
