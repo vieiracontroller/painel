@@ -1231,7 +1231,7 @@ def render_base_clientes():
                                 cliente_id_pag = int(float(to_python_scalar(lanc["cliente_id"])))
                                 valor_pag = float(to_python_scalar(lanc["Valor"]))
                                 id_fin = lanc["id_financeiro"]
-                                timestamp_pag = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+                                data_atual = datetime.now().isoformat()
 
                                 if lanc["Tipo"] == "Serviço Extra":
                                     if id_fin is None:
@@ -1239,7 +1239,7 @@ def render_base_clientes():
                                     id_fin_int = int(float(to_python_scalar(id_fin)))
                                     supabase.table("financeiro_mensal").update({
                                         "status": "Pago",
-                                        "data_pagamento": timestamp_pag
+                                        "data_pagamento": data_atual
                                     }).eq("id", id_fin_int).execute()
                                 else:
                                     if id_fin is None:
@@ -1252,14 +1252,14 @@ def render_base_clientes():
                                             "ano": ano_ref,
                                             "data_vencimento": str(lanc["Data de Vencimento"]),
                                             "status": "Pago",
-                                            "data_pagamento": timestamp_pag,
+                                            "data_pagamento": data_atual,
                                             "data_lancamento": datetime.now().strftime("%Y-%m-%d")
                                         }).execute()
                                     else:
                                         id_fin_int = int(float(to_python_scalar(id_fin)))
                                         supabase.table("financeiro_mensal").update({
                                             "status": "Pago",
-                                            "data_pagamento": timestamp_pag
+                                            "data_pagamento": data_atual
                                         }).eq("id", id_fin_int).execute()
 
                                 st.success("Lançamento marcado como pago com sucesso!")
