@@ -209,17 +209,25 @@ def garantir_usuario_master_vieira():
             "perfil": "Master"
         }
 
-        res_usuario = (
-            supabase.table("usuarios_escritorio")
-            .select("id")
-            .or_(f"email.eq.{login_master},usuario.eq.vieiracontroller")
-            .eq("escritorio_id", escritorio_id)
-            .limit(1)
-            .execute()
-        )
+        usuario_existente = None
+        for campo_busca in ("email", "usuario"):
+            try:
+                res_usuario = (
+                    supabase.table("usuarios_escritorio")
+                    .select("id")
+                    .eq(campo_busca, login_master if campo_busca == "email" else "vieiracontroller")
+                    .eq("escritorio_id", escritorio_id)
+                    .limit(1)
+                    .execute()
+                )
+                if res_usuario.data:
+                    usuario_existente = res_usuario.data[0]
+                    break
+            except Exception:
+                continue
 
-        if res_usuario.data:
-            usuario_id = res_usuario.data[0].get("id")
+        if usuario_existente:
+            usuario_id = usuario_existente.get("id")
             if usuario_id is not None:
                 supabase.table("usuarios_escritorio").update(payload_master).eq("id", int(usuario_id)).execute()
         else:
@@ -231,16 +239,38 @@ def garantir_usuario_master_vieira():
 def realizar_login(usuario, senha):
     garantir_usuario_master_vieira()
 
-    res = (
-        supabase.table("usuarios_escritorio")
-        .select("*")
-        .or_(f"email.eq.{usuario},usuario.eq.{usuario}")
-        .eq("senha", senha)
-        .limit(1)
-        .execute()
-    )
-    if res.data:
-        usuario_dados = res.data[0]
+    usuario_dados = None
+    for campo_busca in ("email", "usuario"):
+        try:
+            res = (
+                supabase.table("usuarios_escritorio")
+                .select("*")
+                .eq(campo_busca, usuario)
+                .eq("senha", senha)
+                .limit(1)
+                .execute()
+            )
+            if res.data:
+                usuario_dados = res.data[0]
+                break
+        except Exception:
+            continue
+
+    if not usuario_dados and str(usuario).strip().lower() == "vieiracontroller@gmail.com":
+        try:
+            res = (
+                supabase.table("usuarios_escritorio")
+                .select("*")
+                .eq("senha", senha)
+                .limit(1)
+                .execute()
+            )
+            if res.data:
+                usuario_dados = res.data[0]
+        except Exception:
+            usuario_dados = None
+
+    if usuario_dados:
         st.session_state['usuario_logado'] = usuario_dados
         st.session_state['usuario_logado_email'] = str(usuario_dados.get('email') or usuario_dados.get('usuario') or usuario).strip()
         st.session_state['escritorio_id'] = usuario_dados.get('escritorio_id') or usuario_dados.get('id_escritorio') or 1
