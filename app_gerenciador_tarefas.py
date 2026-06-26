@@ -354,11 +354,13 @@ def carregar_acessos():
         escritorio_id = garantir_escritorio_id()
         res = supabase.table("usuarios_clientes").select("*, clientes(nome)").eq("escritorio_id", escritorio_id).execute()
         return res.data or []
-    except Exception:
+    except Exception as e:
+        _avisar_falha_carregamento("acessos", "os acessos dos clientes", e)
         try:
             res = supabase.table("usuarios_clientes").select("*, clientes(nome)").execute()
             return res.data or []
-        except Exception:
+        except Exception as fallback_error:
+            _avisar_falha_carregamento("acessos_fallback", "os acessos dos clientes", fallback_error)
             return []
 
 
@@ -368,7 +370,8 @@ def carregar_config_obrigacoes():
         escritorio_id = garantir_escritorio_id()
         res = supabase.table("config_obrigacoes").select("*").eq("escritorio_id", escritorio_id).execute()
         return res.data or []
-    except Exception:
+    except Exception as e:
+        _avisar_falha_carregamento("config_obrigacoes", "as configuracoes de obrigacoes", e)
         return []
 
 
@@ -378,7 +381,8 @@ def carregar_usuarios_escritorio():
         escritorio_id = garantir_escritorio_id()
         res = supabase.table("usuarios_escritorio").select("*").eq("escritorio_id", escritorio_id).execute()
         return res.data or []
-    except Exception:
+    except Exception as e:
+        _avisar_falha_carregamento("usuarios_escritorio", "os usuarios do escritorio", e)
         return []
 
 
@@ -402,7 +406,8 @@ def carregar_financeiro():
         escritorio_id = garantir_escritorio_id()
         res = supabase.table("financeiro_mensal").select("*").eq("escritorio_id", escritorio_id).execute()
         return res.data or []
-    except Exception:
+    except Exception as e:
+        _avisar_falha_carregamento("financeiro", "os dados financeiros", e)
         return []
 
 
@@ -412,7 +417,8 @@ def carregar_permissoes_usuario():
         escritorio_id = garantir_escritorio_id()
         res = supabase.table("permissoes_usuarios").select("*").eq("escritorio_id", escritorio_id).execute()
         return res.data or []
-    except Exception:
+    except Exception as e:
+        _avisar_falha_carregamento("permissoes_usuario", "as permissoes dos usuarios", e)
         return []
 
 
