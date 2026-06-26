@@ -6,6 +6,8 @@ from calendar import monthrange
 from supabase import create_client, Client
 from streamlit_option_menu import option_menu
 
+ADMIN_MASTER_EMAIL = str(st.secrets.get("admin_master_email", "fernanda@vcontroll.com.br")).strip().lower()
+
 # ============================================================================
 # CONFIGURAÇÃO DE IDENTIDADE VISUAL - V-CONTROLL HUB
 # ============================================================================
@@ -152,20 +154,55 @@ if 'logado' not in st.session_state:
     st.session_state.logado = False
     st.session_state.perfil = None
     st.session_state.cliente_id_logado = None
+    st.session_state.usuario_logado_email = None
+    st.session_state.escritorio_id = None
+    st.session_state.is_admin_master = False
+
+if 'usuario_logado_email' not in st.session_state:
+    st.session_state.usuario_logado_email = None
+if 'escritorio_id' not in st.session_state:
+    st.session_state.escritorio_id = None
+if 'is_admin_master' not in st.session_state:
+    st.session_state.is_admin_master = False
+
+
+def escritorio_id_logado():
+    return st.session_state.get("escritorio_id")
+
+
+def garantir_escritorio_id():
+    escritorio_id = escritorio_id_logado()
+    if escritorio_id is None:
+        st.error("Sessao invalida: escritorio_id nao encontrado. Faça login novamente.")
+        st.stop()
+    return escritorio_id
 
 
 def realizar_login(usuario, senha):
-    if usuario == "vieiracontroller" and senha == "123456":
-        st.session_state.logado = True
-        st.session_state.perfil = "escritorio"
-        st.session_state.cliente_id_logado = None
-        st.rerun()
-
-    res = supabase.table("usuarios_clientes").select("*").eq("email", usuario).eq("senha", senha).execute()
+    res = supabase.table("usuarios").select("*").eq("email", usuario).eq("senha", senha).limit(1).execute()
     if res.data:
+        dados_usuario = res.data[0]
         st.session_state.logado = True
-        st.session_state.perfil = "cliente"
-        st.session_state.cliente_id_logado = res.data[0]["cliente_id"]
+        st.session_state.usuario_logado_email = str(dados_usuario.get("email", usuario)).strip()
+        st.session_state.escritorio_id = dados_usuario.get("escritorio_id")
+        st.session_state.is_admin_master = st.session_state.usuario_logado_email.lower() == ADMIN_MASTER_EMAIL
+
+        perfil = str(dados_usuario.get("perfil", "escritorio")).strip().lower()
+        if perfil == "cliente":
+            st.session_state.perfil = "cliente"
+            st.session_state.cliente_id_logado = dados_usuario.get("cliente_id")
+        else:
+            st.session_state.perfil = "escritorio"
+            st.session_state.cliente_id_logado = None
+
+        if st.session_state.escritorio_id is None and not st.session_state.is_admin_master:
+            st.session_state.logado = False
+            st.session_state.perfil = None
+            st.session_state.cliente_id_logado = None
+            st.session_state.usuario_logado_email = None
+            st.error("Usuario sem escritorio vinculado. Contate o suporte.")
+            return
+
         st.rerun()
 
     st.error("Usuário ou senha incorretos.")
@@ -175,34 +212,40 @@ def realizar_login(usuario, senha):
 # ============================================================================
 
 def carregar_clientes():
-    res = supabase.table("clientes").select("*").order("nome").execute()
+    escritorio_id = garantir_escritorio_id()
+    res = supabase.table("clientes").select("*").eq("escritorio_id", escritorio_id).order("nome").execute()
     return res.data or []
 
 
 def carregar_tarefas():
-    res = supabase.table("tarefas").select("*").execute()
+    escritorio_id = garantir_escritorio_id()
+    res = supabase.table("tarefas").select("*").eq("escritorio_id", escritorio_id).execute()
     return res.data or []
 
 
 def carregar_documentos_fixos():
-    res = supabase.table("documentos_fixos").select("*, clientes(nome)").execute()
+    escritorio_id = garantir_escritorio_id()
+    res = supabase.table("documentos_fixos").select("*, clientes(nome)").eq("escritorio_id", escritorio_id).execute()
     return res.data or []
 
 
 def carregar_arquivos_escritorio():
-    res = supabase.table("arquivos_escritorio").select("*").execute()
+    escritorio_id = garantir_escritorio_id()
+    res = supabase.table("arquivos_escritorio").select("*").eq("escritorio_id", escritorio_id).execute()
     return res.data or []
 
 
 def carregar_acessos():
-    res = supabase.table("usuarios_clientes").select("*, clientes(nome)").execute()
+    escritorio_id = garantir_escritorio_id()
+    res = supabase.table("usuarios_clientes").select("*, clientes(nome)").eq("escritorio_id", escritorio_id).execute()
     return res.data or []
 
 
 def carregar_config_obrigacoes():
     """Carrega configurações mestras de obrigações do catálogo"""
     try:
-        res = supabase.table("config_obrigacoes").select("*").execute()
+        escritorio_id = garantir_escritorio_id()
+        res = supabase.table("config_obrigacoes").select("*").eq("escritorio_id", escritorio_id).execute()
         return res.data or []
     except Exception:
         return []
@@ -211,7 +254,8 @@ def carregar_config_obrigacoes():
 def carregar_usuarios_escritorio():
     """Carrega usuários internos do escritório"""
     try:
-        res = supabase.table("usuarios_escritorio").select("*").execute()
+        escritorio_id = garantir_escritorio_id()
+        res = supabase.table("usuarios_escritorio").select("*").eq("escritorio_id", escritorio_id).execute()
         return res.data or []
     except Exception:
         return []
@@ -234,7 +278,8 @@ def extrapolar_tarefas_por_mes(df_tarefas, mes, ano):
 def carregar_financeiro():
     """Carrega dados financeiros da tabela 'financeiro_mensal'"""
     try:
-        res = supabase.table("financeiro_mensal").select("*").execute()
+        escritorio_id = garantir_escritorio_id()
+        res = supabase.table("financeiro_mensal").select("*").eq("escritorio_id", escritorio_id).execute()
         return res.data or []
     except Exception:
         return []
@@ -243,7 +288,8 @@ def carregar_financeiro():
 def carregar_permissoes_usuario():
     """Carrega permissões de usuários (tabela 'permissoes_usuarios')"""
     try:
-        res = supabase.table("permissoes_usuarios").select("*").execute()
+        escritorio_id = garantir_escritorio_id()
+        res = supabase.table("permissoes_usuarios").select("*").eq("escritorio_id", escritorio_id).execute()
         return res.data or []
     except Exception:
         return []
@@ -252,7 +298,8 @@ def carregar_permissoes_usuario():
 def obter_perfil_usuario(usuario_email):
     """Obtém o perfil (Gestão/Funcionário) de um usuário"""
     try:
-        res = supabase.table("usuarios_clientes").select("*").eq("email", usuario_email).execute()
+        escritorio_id = garantir_escritorio_id()
+        res = supabase.table("usuarios_clientes").select("*").eq("email", usuario_email).eq("escritorio_id", escritorio_id).execute()
         if res.data:
             return res.data[0].get("grupo_acesso", "Cliente")
         return "Cliente"
@@ -283,20 +330,21 @@ def gerar_obrigacoes_mes(mes: str, ano: str):
     e faz bulk insert na tabela 'tarefas'.
     """
     try:
+        escritorio_id = garantir_escritorio_id()
         # Carregar clientes ativos
-        clientes_ativos = supabase.table("clientes").select("*").eq("status_cadastro", "Ativo").execute().data or []
+        clientes_ativos = supabase.table("clientes").select("*").eq("escritorio_id", escritorio_id).eq("status_cadastro", "Ativo").execute().data or []
         
         if not clientes_ativos:
             return {"sucesso": False, "mensagem": "Nenhum cliente ativo encontrado.", "inseridas": 0}
         
         # Carregar config de obrigações
-        config_obrigacoes = supabase.table("config_obrigacoes").select("*").execute().data or []
+        config_obrigacoes = supabase.table("config_obrigacoes").select("*").eq("escritorio_id", escritorio_id).execute().data or []
         
         if not config_obrigacoes:
             return {"sucesso": False, "mensagem": "Catálogo de obrigações não configurado.", "inseridas": 0}
         
         # Obrigações existentes para não duplicar
-        tarefas_existentes = supabase.table("tarefas").select("cliente_id,obrigacao,mes,ano").execute().data or []
+        tarefas_existentes = supabase.table("tarefas").select("cliente_id,obrigacao,mes,ano").eq("escritorio_id", escritorio_id).execute().data or []
         existentes = {(t["cliente_id"], t["obrigacao"], t["mes"], t["ano"]) for t in tarefas_existentes}
         
         inseridas = 0
@@ -322,6 +370,7 @@ def gerar_obrigacoes_mes(mes: str, ano: str):
                 key = (cliente_id, obr["obrigacao"], mes, ano)
                 if key not in existentes:
                     novas_tarefas.append({
+                        "escritorio_id": escritorio_id,
                         "cliente_id": cliente_id,
                         "obrigacao": obr["obrigacao"],
                         "vencimento": obr.get("prazo", ""),
@@ -347,6 +396,7 @@ def gerar_obrigacoes_mes(mes: str, ano: str):
 # ============================================================================
 
 def render_dashboard():
+    escritorio_id = garantir_escritorio_id()
     st.title("🐴 📊 V-Controll Hub - Painel de Controle")
     st.markdown("Bem-vindo(a) ao centro de monitoramento integrado da Vieira Controller. Acompanhe clientes, tarefas e documentos em tempo real.")
 
@@ -542,7 +592,7 @@ def render_dashboard():
                 selected_tarefa = st.selectbox("Selecione a obrigação pendente:", list(tarefa_options.keys()))
                 if st.button("✅ Marcar como Concluída"):
                     tarefa_id = tarefa_options[selected_tarefa]
-                    supabase.table("tarefas").update({"status": "Concluído"}).eq("id", int(tarefa_id)).execute()
+                    supabase.table("tarefas").update({"status": "Concluído"}).eq("id", int(tarefa_id)).eq("escritorio_id", escritorio_id).execute()
                     st.success("Obrigação concluída com sucesso!")
                     st.rerun()
             else:
@@ -557,6 +607,7 @@ def render_dashboard():
 # ============================================================================
 
 def render_upload_documentos():
+    escritorio_id = garantir_escritorio_id()
     st.subheader("📤 Enviar Documentos para Clientes")
     st.markdown("Use este formulário para enviar arquivos mensais e fixos diretamente para os clientes.")
 
@@ -590,6 +641,7 @@ def render_upload_documentos():
                     file_options={"content-type": arquivo_upload.type}
                 )
                 supabase.table("arquivos_escritorio").insert({
+                    "escritorio_id": escritorio_id,
                     "cliente_id": id_cliente,
                     "ano": ano_comp,
                     "mes": mes_comp,
@@ -617,6 +669,7 @@ def render_upload_documentos():
                     file_options={"content-type": arquivo_upload.type}
                 )
                 supabase.table("documentos_fixos").insert({
+                    "escritorio_id": escritorio_id,
                     "cliente_id": id_cliente,
                     "tipo_documento": descricao_doc,
                     "nome_arquivo": arquivo_upload.name,
@@ -629,6 +682,7 @@ def render_upload_documentos():
 # ============================================================================
 
 def render_cadastrar_cliente():
+    escritorio_id = garantir_escritorio_id()
     st.title("➕ Cadastro de Cliente e Acesso")
     st.markdown("Registre o cliente e crie o usuário de acesso do cliente em um único fluxo.")
 
@@ -686,6 +740,7 @@ def render_cadastrar_cliente():
             else:
                 try:
                     ins_res = supabase.table("clientes").insert({
+                        "escritorio_id": escritorio_id,
                         "nome": nome,
                         "cnpj": cnpj,
                         "inscricao_estadual": ie,
@@ -704,6 +759,7 @@ def render_cadastrar_cliente():
 
                     cliente_id = ins_res.data[0]["id"]
                     supabase.table("usuarios_clientes").insert({
+                        "escritorio_id": escritorio_id,
                         "cliente_id": cliente_id,
                         "email": usuario_email,
                         "senha": usuario_senha,
@@ -711,8 +767,18 @@ def render_cadastrar_cliente():
                         "grupo_acesso": "Cliente"
                     }).execute()
 
+                    supabase.table("usuarios").insert({
+                        "escritorio_id": escritorio_id,
+                        "cliente_id": cliente_id,
+                        "nome": usuario_nome,
+                        "email": usuario_email,
+                        "senha": usuario_senha,
+                        "perfil": "cliente"
+                    }).execute()
+
                     for ob in OBRIGACOES_BASE[regime]:
                         supabase.table("tarefas").insert({
+                            "escritorio_id": escritorio_id,
                             "cliente_id": cliente_id,
                             "obrigacao": ob["obrigacao"],
                             "vencimento": ob["prazo"],
@@ -737,6 +803,7 @@ def render_central_obrigacoes():
     Combina: geração automática por mês + criação manual de obrigações avulsas.
     """
     st.title("🗂️ Central de Obrigações")
+    escritorio_id = garantir_escritorio_id()
     st.markdown("Gerencie as obrigações do mês e crie obrigações customizadas conforme necessário.")
 
     clientes = carregar_clientes()
@@ -800,6 +867,7 @@ def render_central_obrigacoes():
                 else:
                     cliente_id = next(c["id"] for c in clientes if c["nome"] == cliente_selecionado)
                     supabase.table("tarefas").insert({
+                        "escritorio_id": escritorio_id,
                         "cliente_id": cliente_id,
                         "obrigacao": nome_ob,
                         "descricao": descricao_ob if descricao_ob else None,
@@ -818,14 +886,15 @@ def render_central_obrigacoes():
 # ============================================================================
 
 def render_base_clientes():
+    escritorio_id = garantir_escritorio_id()
     st.title("👥 Base de Clientes")
     st.markdown("Visualize a base de clientes, regimes tributários e credenciais de acesso. Atualize senhas de clientes diretamente daqui.")
 
     try:
-        res_usuarios = supabase.table("usuarios_clientes").select("*").execute()
+        res_usuarios = supabase.table("usuarios_clientes").select("*").eq("escritorio_id", escritorio_id).execute()
         df_usuarios = pd.DataFrame(res_usuarios.data or [])
 
-        res_clientes = supabase.table("clientes").select("*").execute()
+        res_clientes = supabase.table("clientes").select("*").eq("escritorio_id", escritorio_id).execute()
         df_clientes = pd.DataFrame(res_clientes.data or [])
 
         if not df_usuarios.empty and not df_clientes.empty:
@@ -908,9 +977,9 @@ def render_base_clientes():
 
         if id_cliente_correto is not None and salvar_status:
             try:
-                supabase.table('clientes').update({'status_cadastro': novo_status}).eq('id', id_cliente_correto).execute()
+                supabase.table('clientes').update({'status_cadastro': novo_status}).eq('id', id_cliente_correto).eq('escritorio_id', escritorio_id).execute()
                 if novo_status == 'Inativo':
-                    supabase.table('tarefas').delete().eq('cliente_id', id_cliente_correto).eq('status', 'Pendente').execute()
+                    supabase.table('tarefas').delete().eq('cliente_id', id_cliente_correto).eq('status', 'Pendente').eq('escritorio_id', escritorio_id).execute()
                 st.success('Status atualizado com sucesso!')
                 st.rerun()
             except Exception as error:
@@ -948,7 +1017,7 @@ def render_base_clientes():
                             supabase.table('clientes').update({
                                 'valor_honorario': float(valor_honorario),
                                 'dia_vencimento': int(dia_vencimento)
-                            }).eq('id', cliente_id_fin).execute()
+                            }).eq('id', cliente_id_fin).eq('escritorio_id', escritorio_id).execute()
                             st.success("Dados financeiros salvos com sucesso!")
                             st.rerun()
                 except Exception as e:
@@ -1065,7 +1134,7 @@ def render_base_clientes():
                             if user_id:
                                 supabase.table('usuarios_clientes').update({
                                     'grupo_acesso': novo_grupo
-                                }).eq('id', int(user_id)).execute()
+                                }).eq('id', int(user_id)).eq('escritorio_id', escritorio_id).execute()
                                 st.success(f"Grupo de acesso atualizado para {novo_grupo}!")
                                 st.rerun()
                         except Exception as e:
@@ -1117,13 +1186,13 @@ def render_base_clientes():
             clientes_ativos = [c for c in carregar_clientes() if c.get("status_cadastro") == "Ativo"]
 
             try:
-                recebimentos = supabase.table("financeiro_mensal").select("*").eq("mes", mes_ref).eq("ano", ano_ref).execute().data or []
+                recebimentos = supabase.table("financeiro_mensal").select("*").eq("escritorio_id", escritorio_id).eq("mes", mes_ref).eq("ano", ano_ref).execute().data or []
             except Exception as e:
                 st.error(f"Erro ao carregar contas a receber: {e}")
                 recebimentos = []
 
             try:
-                despesas = supabase.table("contas_a_pagar").select("*").eq("mes", mes_ref).eq("ano", ano_ref).execute().data or []
+                despesas = supabase.table("contas_a_pagar").select("*").eq("escritorio_id", escritorio_id).eq("mes", mes_ref).eq("ano", ano_ref).execute().data or []
             except Exception:
                 despesas = []
 
@@ -1190,7 +1259,7 @@ def render_base_clientes():
                                         supabase.table("financeiro_mensal").update({
                                             "status": "Pago",
                                             "data_pagamento": data_atual
-                                        }).eq("id", int(row_id)).execute()
+                                        }).eq("id", int(row_id)).eq("escritorio_id", escritorio_id).execute()
                                         st.success("Recebimento atualizado como pago.")
                                         st.rerun()
                                     except Exception as e:
@@ -1219,6 +1288,7 @@ def render_base_clientes():
                                     if cliente_id_extra is not None:
                                         try:
                                             supabase.table("financeiro_mensal").insert({
+                                                "escritorio_id": escritorio_id,
                                                 "cliente_id": int(to_python_scalar(cliente_id_extra)),
                                                 "tipo": "Serviço Extra",
                                                 "descricao": nome_servico,
@@ -1261,6 +1331,7 @@ def render_base_clientes():
                             else:
                                 try:
                                     supabase.table("contas_a_pagar").insert({
+                                        "escritorio_id": escritorio_id,
                                         "descricao": desp_descricao,
                                         "fornecedor": desp_fornecedor,
                                         "categoria": desp_categoria,
@@ -1301,7 +1372,7 @@ def render_base_clientes():
                                         supabase.table("contas_a_pagar").update({
                                             "status": "Pago",
                                             "data_pagamento": data_atual
-                                        }).eq("id", int(desp_id)).execute()
+                                        }).eq("id", int(desp_id)).eq("escritorio_id", escritorio_id).execute()
                                         st.success("Despesa baixada com sucesso.")
                                         st.rerun()
                                     except Exception as e:
@@ -1321,7 +1392,8 @@ def render_base_clientes():
 # ============================================================================
 
 def render_portal_cliente():
-    cli_res = supabase.table("clientes").select("*").eq("id", st.session_state.cliente_id_logado).execute()
+    escritorio_id = garantir_escritorio_id()
+    cli_res = supabase.table("clientes").select("*").eq("id", st.session_state.cliente_id_logado).eq("escritorio_id", escritorio_id).execute()
     if not cli_res.data:
         st.error("Cliente não encontrado.")
         return
@@ -1338,7 +1410,7 @@ def render_portal_cliente():
         st.subheader("👤 Meu Usuário")
         
         # Obter dados do usuário logado
-        usuario_logado_res = supabase.table("usuarios_clientes").select("*").eq("cliente_id", cliente['id']).execute()
+        usuario_logado_res = supabase.table("usuarios_clientes").select("*").eq("cliente_id", cliente['id']).eq("escritorio_id", escritorio_id).execute()
         if usuario_logado_res.data:
             usuario_logado = usuario_logado_res.data[0]
             
@@ -1371,7 +1443,10 @@ def render_portal_cliente():
                         try:
                             supabase.table("usuarios_clientes").update({
                                 "senha": nova_senha
-                            }).eq("id", int(usuario_logado['id'])).execute()
+                            }).eq("id", int(usuario_logado['id'])).eq("escritorio_id", escritorio_id).execute()
+                            supabase.table("usuarios").update({
+                                "senha": nova_senha
+                            }).eq("email", usuario_logado.get("email", "")).eq("escritorio_id", escritorio_id).execute()
                             st.success("Senha alterada com sucesso!")
                             st.rerun()
                         except Exception as e:
@@ -1386,7 +1461,7 @@ def render_portal_cliente():
         tab_fixos_sub, tab_mensais_sub = st.tabs(["📄 Documentos Fixos", "📅 Guias Mensais"])
         
         with tab_fixos_sub:
-            docs_fixos = supabase.table("documentos_fixos").select("*").eq("cliente_id", cliente["id"]).execute().data or []
+            docs_fixos = supabase.table("documentos_fixos").select("*").eq("cliente_id", cliente["id"]).eq("escritorio_id", escritorio_id).execute().data or []
             if docs_fixos:
                 df_fixos = pd.DataFrame(docs_fixos)
                 df_fixos_exib = df_fixos[["tipo_documento", "nome_arquivo"]].rename(columns={"tipo_documento": "Descrição", "nome_arquivo": "Arquivo"})
@@ -1408,7 +1483,7 @@ def render_portal_cliente():
             with col_b:
                 ano_filtrado = st.selectbox("Ano:", ["Todos"] + LISTA_ANOS, index=1)
 
-            query = supabase.table("arquivos_escritorio").select("*").eq("cliente_id", cliente["id"])
+            query = supabase.table("arquivos_escritorio").select("*").eq("cliente_id", cliente["id"]).eq("escritorio_id", escritorio_id)
             if mes_filtrado != "Todos":
                 query = query.eq("mes", mes_filtrado)
             if ano_filtrado != "Todos":
@@ -1444,7 +1519,7 @@ def render_portal_cliente():
         data_venc_mensalidade = gerar_data_vencimento(ano_atual, mes_atual, dia_vencimento)
 
         try:
-            financeiro_cliente = supabase.table("financeiro_mensal").select("*").eq("cliente_id", int(to_python_scalar(cliente["id"]))).execute().data or []
+            financeiro_cliente = supabase.table("financeiro_mensal").select("*").eq("cliente_id", int(to_python_scalar(cliente["id"]))).eq("escritorio_id", escritorio_id).execute().data or []
             df_financeiro = pd.DataFrame(financeiro_cliente)
 
             mensalidade_atual = None
@@ -1517,6 +1592,87 @@ def render_portal_cliente():
         st.markdown("### 📎 Documentos Fiscais (NF / Recibos)")
         st.info("📎 Consulte com o escritório para obter cópias de notas fiscais, recibos e faturas emitidas.")
 
+
+def render_gestao_saas():
+    st.title("⚙️ Gestão SaaS")
+    st.markdown("Área master para onboarding de escritórios parceiros e seus administradores.")
+
+    if not st.session_state.get("is_admin_master", False):
+        st.error("Acesso restrito ao admin master.")
+        return
+
+    with st.expander("🏢 Cadastrar Novo Escritório", expanded=True):
+        with st.form("form_novo_escritorio"):
+            nome_escritorio = st.text_input("Nome do Escritório")
+            email_escritorio = st.text_input("E-mail de Contato")
+            telefone_escritorio = st.text_input("Telefone")
+            plano_escritorio = st.selectbox("Plano", ["Starter", "Pro", "Enterprise"], index=0)
+
+            if st.form_submit_button("Cadastrar Escritório"):
+                if not nome_escritorio or not email_escritorio:
+                    st.error("Informe ao menos nome e e-mail do escritório.")
+                else:
+                    try:
+                        insert_escritorio = supabase.table("escritorios").insert({
+                            "nome": nome_escritorio,
+                            "email": email_escritorio,
+                            "telefone": telefone_escritorio,
+                            "plano": plano_escritorio,
+                            "status": "Ativo",
+                            "data_cadastro": datetime.now().strftime("%Y-%m-%d")
+                        }).execute()
+
+                        if not insert_escritorio.data:
+                            raise ValueError("Falha ao cadastrar escritório.")
+
+                        st.session_state["novo_escritorio_id"] = insert_escritorio.data[0].get("id")
+                        st.success("Escritório cadastrado com sucesso.")
+                    except Exception as e:
+                        st.error(f"Erro ao cadastrar escritório: {e}")
+
+    with st.expander("👤 Cadastrar Primeiro Usuário Administrador", expanded=True):
+        try:
+            escritorios = supabase.table("escritorios").select("id,nome,status").order("nome").execute().data or []
+        except Exception:
+            escritorios = []
+
+        if not escritorios:
+            st.info("Cadastre um escritório antes de criar o usuário administrador.")
+            return
+
+        mapa_escritorios = {f"{e.get('nome', '-') } (ID {e.get('id')})": e.get("id") for e in escritorios}
+        default_escritorio_id = st.session_state.get("novo_escritorio_id")
+        default_index = 0
+        if default_escritorio_id is not None:
+            for i, (_, eid) in enumerate(mapa_escritorios.items()):
+                if eid == default_escritorio_id:
+                    default_index = i
+                    break
+
+        with st.form("form_primeiro_admin_escritorio"):
+            escritorio_label = st.selectbox("Escritório", list(mapa_escritorios.keys()), index=default_index)
+            nome_admin = st.text_input("Nome do Administrador")
+            email_admin = st.text_input("E-mail de Login")
+            senha_admin = st.text_input("Senha Inicial", type="password")
+
+            if st.form_submit_button("Cadastrar Administrador"):
+                if not nome_admin or not email_admin or not senha_admin:
+                    st.error("Preencha nome, e-mail e senha do administrador.")
+                else:
+                    try:
+                        escritorio_id = mapa_escritorios[escritorio_label]
+                        supabase.table("usuarios").insert({
+                            "escritorio_id": escritorio_id,
+                            "nome": nome_admin,
+                            "email": email_admin,
+                            "senha": senha_admin,
+                            "perfil": "escritorio",
+                            "grupo_acesso": "Gestão"
+                        }).execute()
+                        st.success("Administrador do escritório cadastrado com sucesso.")
+                    except Exception as e:
+                        st.error(f"Erro ao cadastrar administrador: {e}")
+
 # ============================================================================
 # FLUXO PRINCIPAL - AUTENTICAÇÃO E NAVEGAÇÃO
 # ============================================================================
@@ -1542,10 +1698,16 @@ else:
         with st.sidebar:
             st.markdown("<h3 style='text-align: center; color: #ffffff; font-family: sans-serif; margin-top: 10px; margin-bottom: 20px;'>📊 V-CONTROLL HUB</h3>", unsafe_allow_html=True)
 
+            opcoes_menu = ["Dashboard Geral", "Documentos e Tarefas", "Cadastrar Cliente", "Central de Obrigações", "Base de Clientes", "Financeiro"]
+            icones_menu = ["house", "file-earmark-check", "plus-circle", "calendar-check", "people", "currency-dollar"]
+            if st.session_state.get("is_admin_master", False):
+                opcoes_menu.append("Gestão SaaS")
+                icones_menu.append("gear-wide-connected")
+
             escolha = option_menu(
                 menu_title=None,
-                options=["Dashboard Geral", "Documentos e Tarefas", "Cadastrar Cliente", "Central de Obrigações", "Base de Clientes", "Financeiro"],
-                icons=["house", "file-earmark-check", "plus-circle", "calendar-check", "people", "currency-dollar"],
+                options=opcoes_menu,
+                icons=icones_menu,
                 menu_icon="cast",
                 default_index=0,
                 styles={
@@ -1560,6 +1722,9 @@ else:
                 st.session_state.logado = False
                 st.session_state.perfil = None
                 st.session_state.cliente_id_logado = None
+                st.session_state.usuario_logado_email = None
+                st.session_state.escritorio_id = None
+                st.session_state.is_admin_master = False
                 st.rerun()
 
         if escolha == "Dashboard Geral":
@@ -1574,6 +1739,8 @@ else:
             render_base_clientes()
         elif escolha == "Financeiro":
             render_base_clientes()
+        elif escolha == "Gestão SaaS":
+            render_gestao_saas()
     else:
         with st.sidebar:
             st.markdown("<h3 style='text-align: center; color: #ffffff; font-family: sans-serif; margin-top: 10px; margin-bottom: 20px;'>📊 V-CONTROLL HUB</h3>", unsafe_allow_html=True)
@@ -1598,4 +1765,7 @@ else:
             st.session_state.logado = False
             st.session_state.perfil = None
             st.session_state.cliente_id_logado = None
+            st.session_state.usuario_logado_email = None
+            st.session_state.escritorio_id = None
+            st.session_state.is_admin_master = False
             st.rerun()
