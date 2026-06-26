@@ -70,10 +70,15 @@ st.markdown(f"""
 st.markdown(
     """
     <style>
+    /* Esconde o menu de compartilhamento e edição no topo direito */
     #MainMenu {visibility: hidden;}
     header {visibility: hidden;}
-    footer {visibility: hidden;}
+
+    /* Esconde o botão de deploy/código do Streamlit no canto inferior */
     .stAppDeployButton {display: none !important;}
+
+    /* Garante que o ícone do menu lateral não seja afetado pelo hide do header */
+    button[aria-label="Toggle navigation"] {display: block !important;}
     </style>
     """,
     unsafe_allow_html=True
