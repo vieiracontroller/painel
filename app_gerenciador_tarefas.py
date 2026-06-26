@@ -287,6 +287,16 @@ def realizar_login(usuario, senha):
 # MÓDULO: FUNÇÕES DE CARREGAMENTO DE DADOS
 # ============================================================================
 
+def _avisar_falha_carregamento(chave: str, entidade: str, erro: Exception):
+    """Mostra um aviso amigavel apenas uma vez por sessao para evitar ruido na tela."""
+    aviso_key = f"_warning_carregamento_{chave}"
+    if not st.session_state.get(aviso_key):
+        st.session_state[aviso_key] = True
+        st.warning(
+            f"Nao foi possivel carregar {entidade} no momento. O painel vai seguir funcionando com dados vazios. "
+            f"Detalhe tecnico: {erro}"
+        )
+
 def carregar_clientes():
     import streamlit as st
     escritorio_id = st.session_state.get('escritorio_id', 1)
@@ -299,18 +309,24 @@ def carregar_clientes():
             .execute()
         )
         return res.data or []
-    except Exception:
+    except Exception as e:
+        _avisar_falha_carregamento("clientes", "os clientes", e)
         try:
             res = supabase.table("clientes").select("*").order("nome").execute()
             return res.data or []
-        except Exception:
+        except Exception as fallback_error:
+            _avisar_falha_carregamento("clientes_fallback", "os clientes", fallback_error)
             return []
 
 
 def carregar_tarefas():
     escritorio_id = garantir_escritorio_id()
-    res = supabase.table("tarefas").select("*").eq("escritorio_id", escritorio_id).execute()
-    return res.data or []
+    try:
+        res = supabase.table("tarefas").select("*").eq("escritorio_id", escritorio_id).execute()
+        return res.data or []
+    except Exception as e:
+        _avisar_falha_carregamento("tarefas", "as tarefas", e)
+        return []
 
 
 def carregar_documentos_fixos():
