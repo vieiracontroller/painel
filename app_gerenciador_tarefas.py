@@ -1,7 +1,6 @@
 import streamlit as st
 import pandas as pd
 import plotly.express as px
-from pathlib import Path
 from datetime import datetime
 from calendar import monthrange
 from supabase import create_client, Client
@@ -525,14 +524,7 @@ def gerar_obrigacoes_mes(mes: str, ano: str):
 
 def render_dashboard():
     escritorio_id = garantir_escritorio_id()
-    if Path("logo.png").exists():
-        col1, col2 = st.columns([1, 4])
-        with col1:
-            st.image("logo.png", width=120)
-        with col2:
-            st.title("Painel de Controle")
-    else:
-        st.title("Painel de Controle")
+    st.image("logo.png", width=380)
     st.markdown("Bem-vindo(a) ao centro de monitoramento integrado da Vieira Controller. Acompanhe clientes, tarefas e documentos em tempo real.")
 
     hoje = datetime.now()
@@ -2009,16 +2001,9 @@ def render_gestao_saas():
 # ============================================================================
 
 if not st.session_state.logado:
-    st.markdown(
-        "<h1 style='text-align: center; font-family: sans-serif; color: #1e293b;'>🔒 V-Controll Hub</h1>",
-        unsafe_allow_html=True
-    )
-    st.markdown(
-        "<p style='text-align: center; font-family: sans-serif; color: #64748b;'>Gestão Contábil e Inteligência Financeira</p>",
-        unsafe_allow_html=True
-    )
     col1, col2, col3 = st.columns([1, 2, 1])
     with col2:
+        st.image("logo.png", width=280)
         with st.form("form_login"):
             usuario = st.text_input("Usuário ou E-mail")
             senha = st.text_input("Senha", type="password")
