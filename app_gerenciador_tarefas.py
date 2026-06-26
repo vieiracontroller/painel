@@ -1523,8 +1523,9 @@ def render_financeiro():
                                     st.error("Preencha descrição, fornecedor e valor da despesa.")
                                 else:
                                     try:
+                                        escritorio_id_despesa = int(to_python_scalar(st.session_state.get("escritorio_id") or escritorio_id or 0))
                                         supabase.table("contas_a_pagar").insert({
-                                            "escritorio_id": escritorio_id,
+                                            "escritorio_id": escritorio_id_despesa,
                                             "descricao": desp_descricao,
                                             "fornecedor": desp_fornecedor,
                                             "categoria": desp_categoria,
@@ -1537,8 +1538,8 @@ def render_financeiro():
                                         }).execute()
                                         st.success("Despesa lançada com sucesso!")
                                         st.rerun()
-                                    except Exception:
-                                        st.info("Não foi possível lançar a despesa neste momento.")
+                                    except Exception as e:
+                                        st.error(f"Erro detalhado: {e}")
 
                     if not df_pagar.empty:
                         cols_pagar = [col for col in ["id", "descricao", "fornecedor", "categoria", "valor", "data_vencimento", "status", "data_pagamento"] if col in df_pagar.columns]
