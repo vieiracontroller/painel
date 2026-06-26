@@ -1273,6 +1273,151 @@ def render_base_clientes():
 
 
 def render_financeiro():
+    usuario_logado = st.session_state.get("usuario_logado") or {}
+    perfil_login = str(usuario_logado.get("perfil", "")).strip().lower()
+    eh_admin_master = bool(st.session_state.get("is_admin_master", False)) or perfil_login in {"admin", "master"}
+
+    if eh_admin_master:
+        st.title("📊 Financeiro")
+        st.markdown("Painel SaaS com controle de mensalidades dos escritórios parceiros.")
+
+        def valor_plano_assinatura(plano_nome: str) -> float:
+            plano = str(plano_nome or "").strip().lower()
+            if "enterprise" in plano:
+                return 799.0
+            if "pro" in plano:
+                return 399.0
+            if "starter" in plano:
+                return 0.0
+            return 0.0
+
+        def proximo_vencimento_padrao() -> str:
+            hoje = datetime.now()
+            mes = hoje.month + 1
+            ano = hoje.year
+            if mes > 12:
+                mes = 1
+                ano += 1
+            return datetime(ano, mes, 10).strftime("%Y-%m-%d")
+
+        try:
+            try:
+                res_escritorios = (
+                    supabase.table("escritorios")
+                    .select("id,nome,plano,status,valor_assinatura,proximo_vencimento,status_pagamento")
+                    .order("nome")
+                    .execute()
+                )
+                escritorios = res_escritorios.data or []
+                colunas_financeiras_disponiveis = True
+            except Exception as e_colunas:
+                st.warning("Algumas colunas financeiras ainda nao existem na tabela escritorios. Mostrando visao com campos padrao.")
+                st.info(f"Detalhe tecnico: {e_colunas}")
+                res_escritorios = (
+                    supabase.table("escritorios")
+                    .select("id,nome,plano,status")
+                    .order("nome")
+                    .execute()
+                )
+                escritorios = res_escritorios.data or []
+                colunas_financeiras_disponiveis = False
+
+            if not escritorios:
+                st.info("Nenhum escritório parceiro encontrado para controle de assinaturas.")
+                return
+
+            linhas_tabela = []
+            total_ativos = 0
+            faturamento_estimado = 0.0
+
+            for esc in escritorios:
+                status_escritorio = str(esc.get("status", "")).strip() or "-"
+                plano_escritorio = str(esc.get("plano", "-")).strip() or "-"
+                valor_assinatura = esc.get("valor_assinatura")
+                if valor_assinatura is None:
+                    valor_assinatura = valor_plano_assinatura(plano_escritorio)
+                valor_assinatura = float(to_python_scalar(valor_assinatura) or 0)
+
+                prox_venc = esc.get("proximo_vencimento")
+                if prox_venc is None or str(prox_venc).strip() == "":
+                    prox_venc = proximo_vencimento_padrao()
+
+                status_pag = str(esc.get("status_pagamento") or "Em Aberto").strip() or "Em Aberto"
+
+                if status_escritorio.lower() == "ativo":
+                    total_ativos += 1
+                    faturamento_estimado += valor_assinatura
+
+                linhas_tabela.append({
+                    "id": to_python_scalar(esc.get("id")),
+                    "Código": to_python_scalar(esc.get("id")),
+                    "Nome do Escritório": str(esc.get("nome", "-")).strip() or "-",
+                    "Plano Contratado": plano_escritorio,
+                    "Valor da Assinatura": valor_assinatura,
+                    "Próximo Vencimento": str(prox_venc),
+                    "Status do Pagamento": status_pag
+                })
+
+            m1, m2 = st.columns(2)
+            with m1:
+                st.metric("Faturamento Mensal Estimado (R$)", f"R$ {faturamento_estimado:,.2f}")
+            with m2:
+                st.metric("Total de Escritórios Ativos", total_ativos)
+
+            st.markdown("---")
+            st.subheader("💳 Controle de Mensalidades dos Parceiros")
+
+            df_saas = pd.DataFrame(linhas_tabela)
+            df_editado = st.data_editor(
+                df_saas,
+                hide_index=True,
+                use_container_width=True,
+                disabled=["id", "Código", "Nome do Escritório", "Plano Contratado", "Valor da Assinatura", "Próximo Vencimento"],
+                column_config={
+                    "Valor da Assinatura": st.column_config.NumberColumn(format="R$ %.2f"),
+                    "Status do Pagamento": st.column_config.SelectboxColumn(
+                        "Status do Pagamento",
+                        options=["Pago", "Em Aberto", "Atrasado"]
+                    )
+                },
+                key="editor_mensalidades_saas"
+            )
+
+            if st.button("💾 Salvar Status de Pagamento", key="salvar_status_pagamentos_saas"):
+                alteracoes = 0
+                try:
+                    for _, linha in df_editado.iterrows():
+                        codigo = to_python_scalar(linha.get("id"))
+                        status_novo = str(linha.get("Status do Pagamento", "")).strip() or "Em Aberto"
+
+                        status_antigo_series = df_saas.loc[df_saas["id"] == codigo, "Status do Pagamento"]
+                        status_antigo = str(status_antigo_series.iloc[0]).strip() if not status_antigo_series.empty else ""
+                        if status_novo == status_antigo:
+                            continue
+
+                        supabase.table("escritorios").update({
+                            "status_pagamento": status_novo
+                        }).eq("id", int(codigo)).execute()
+                        alteracoes += 1
+
+                    if alteracoes:
+                        st.success(f"{alteracoes} status de pagamento atualizados com sucesso.")
+                        st.rerun()
+                    else:
+                        st.info("Nenhuma alteracao de status para salvar.")
+                except Exception as e_update:
+                    st.error(f"Erro ao salvar status de pagamento: {e_update}")
+                    st.warning("Se a coluna status_pagamento ainda nao existir em escritorios, crie-a no Supabase e recarregue o schema.")
+
+            if not colunas_financeiras_disponiveis:
+                st.caption("Sugestao de colunas financeiras para evolucao da tabela escritorios: valor_assinatura (numeric), proximo_vencimento (date), status_pagamento (text).")
+
+            return
+        except Exception as e:
+            st.error(f"Nao foi possivel carregar o painel financeiro SaaS: {e}")
+            st.warning("Verifique se as colunas financeiras existem na tabela escritorios e se o schema do PostgREST esta atualizado.")
+            return
+
     escritorio_id = garantir_escritorio_id()
     st.title("📊 Financeiro")
     st.markdown("Central financeira do escritório com contas a receber, contas a pagar e honorários dos clientes.")
