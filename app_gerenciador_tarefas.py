@@ -1489,6 +1489,44 @@ def render_financeiro():
                 except Exception:
                     recebimentos = []
 
+                # Integra honorarios recorrentes dos clientes ativos no mes atual.
+                try:
+                    clientes_mensalidade_ja_lancada = set()
+                    for rec in recebimentos:
+                        tipo_rec = str(rec.get("tipo") or "").strip().lower()
+                        cliente_ref = rec.get("cliente_id")
+                        if "mensalidade" in tipo_rec and cliente_ref is not None:
+                            clientes_mensalidade_ja_lancada.add(int(to_python_scalar(cliente_ref)))
+
+                    for cliente in clientes_ativos:
+                        cliente_id_ref = cliente.get("id")
+                        if cliente_id_ref is None:
+                            continue
+
+                        cliente_id_int = int(to_python_scalar(cliente_id_ref))
+                        if cliente_id_int in clientes_mensalidade_ja_lancada:
+                            continue
+
+                        valor_hon = float(to_python_scalar(cliente.get("valor_honorario", 0) or 0))
+                        if valor_hon <= 0:
+                            continue
+
+                        dia_venc_hon = int(float(to_python_scalar(cliente.get("dia_vencimento", 10) or 10)))
+                        recebimentos.append({
+                            "id": None,
+                            "cliente_id": cliente_id_int,
+                            "tipo": "Mensalidade",
+                            "descricao": f"Honorarios - {str(cliente.get('nome', '-')).strip() or '-'}",
+                            "valor": valor_hon,
+                            "data_vencimento": gerar_data_vencimento(ano_ref, mes_ref, dia_venc_hon),
+                            "status": "Pendente",
+                            "data_pagamento": None,
+                            "mes": mes_ref,
+                            "ano": ano_ref
+                        })
+                except Exception:
+                    pass
+
                 # Integra receitas de assinaturas SaaS no caixa da Vieira Controller (escritorio_id = 1).
                 try:
                     if int(to_python_scalar(escritorio_id) or 0) == 1:
@@ -1529,8 +1567,8 @@ def render_financeiro():
                             recebimentos.append({
                                 "id": None,
                                 "cliente_id": None,
-                                "tipo": "Mensalidade SaaS",
-                                "descricao": f"Mensalidade SaaS - {str(escritorio_saas.get('nome', '-')).strip() or '-'}",
+                                "tipo": "Receita SaaS",
+                                "descricao": f"Receita SaaS - {str(escritorio_saas.get('nome', '-')).strip() or '-'}",
                                 "valor": float(to_python_scalar(valor_saas) or 0),
                                 "data_vencimento": "-",
                                 "status": "Pago",
@@ -1733,7 +1771,19 @@ def render_financeiro():
                 st.markdown("---")
                 st.markdown("### 📌 Resumo Consolidado")
                 fluxo_caixa_estimado = total_previsto_receber - total_previsto_pagar
-                st.metric("Fluxo de Caixa Estimado do Mês", f"R$ {fluxo_caixa_estimado:,.2f}")
+                c_res_1, c_res_2 = st.columns(2)
+                with c_res_1:
+                    st.metric("Total de Receitas", f"R$ {total_previsto_receber:,.2f}")
+                with c_res_2:
+                    st.metric("Fluxo de Caixa Estimado do Mês", f"R$ {fluxo_caixa_estimado:,.2f}")
+
+                df_fluxo = pd.DataFrame([
+                    {"Categoria": "Receitas", "Valor": total_previsto_receber},
+                    {"Categoria": "Despesas", "Valor": total_previsto_pagar},
+                    {"Categoria": "Saldo", "Valor": fluxo_caixa_estimado},
+                ])
+                fig_fluxo = px.bar(df_fluxo, x="Categoria", y="Valor", color="Categoria", title="Fluxo de Caixa Consolidado")
+                st.plotly_chart(fig_fluxo, use_container_width=True)
 
             except Exception:
                 st.info("A área financeira não pôde ser carregada no momento.")
