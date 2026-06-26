@@ -1521,14 +1521,20 @@ def render_portal_cliente():
 # ============================================================================
 
 if not st.session_state.logado:
-    st.title("🔑 Acesso ao Sistema - 🐴 V-Controll Hub")
-    st.markdown("Faça login para acessar o painel de gestão contábil e fiscal.")
+    st.markdown(
+        "<h1 style='text-align: center; font-family: sans-serif; color: #1e293b;'>🔒 V-Controll Hub</h1>",
+        unsafe_allow_html=True
+    )
+    st.markdown(
+        "<p style='text-align: center; font-family: sans-serif; color: #64748b;'>Gestão Contábil e Inteligência Financeira</p>",
+        unsafe_allow_html=True
+    )
     col1, col2, col3 = st.columns([1, 2, 1])
     with col2:
         with st.form("form_login"):
             usuario = st.text_input("Usuário ou E-mail")
             senha = st.text_input("Senha", type="password")
-            if st.form_submit_button("Entrar"):
+            if st.form_submit_button("Entrar", use_container_width=True):
                 realizar_login(usuario, senha)
 else:
     st.sidebar.header("🐴 V-CONTROLL HUB")
