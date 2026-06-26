@@ -8,6 +8,23 @@ from calendar import monthrange
 from supabase import create_client, Client
 from streamlit_option_menu import option_menu
 
+st.markdown(
+    """
+    <style>
+    /* Esconde o menu de compartilhamento, edição e ícones do Streamlit no topo */
+    #MainMenu {visibility: hidden !important;}
+    header {visibility: hidden !important;}
+
+    /* Esconde o botão de Deploy/Gerenciar aplicativo no canto inferior direito */
+    .stAppDeployButton {display: none !important;}
+
+    /* Esconde o menu de opções (pontinhos) que aparece na barra superior */
+    [data-testid="stToolbar"] {visibility: hidden !important;}
+    </style>
+    """,
+    unsafe_allow_html=True
+)
+
 ADMIN_MASTER_EMAIL = str(st.secrets.get("admin_master_email", "vieiracontroller@gmail.com")).strip().lower()
 
 # ============================================================================
@@ -65,18 +82,6 @@ st.markdown(f"""
     }}
 </style>
 """, unsafe_allow_html=True)
-
-# Oculta apenas o botão de Gerir app sem afetar navegação.
-st.markdown(
-    """
-    <style>
-    [data-testid="stAppDeployButton"] {
-        display: none !important;
-    }
-    </style>
-    """,
-    unsafe_allow_html=True
-)
 
 # ============================================================================
 # CONEXÃO SEGURA COM SUPABASE
