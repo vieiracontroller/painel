@@ -11,21 +11,7 @@ from streamlit_option_menu import option_menu
 st.markdown(
     """
     <style>
-    /* Esconde apenas os itens de administração dentro do header */
-    #MainMenu,
-    header,
-    .stAppDeployButton,
-    [data-testid="stToolbar"],
-    [data-testid="stHeader"] {
-        display: none !important;
-    }
-
-    /* FORÇA o botão de abrir o menu lateral a ficar visível e posicionado */
-    button[aria-label="Toggle navigation"] {
-        display: flex !important;
-        visibility: visible !important;
-        z-index: 9999 !important;
-    }
+    [data-testid="stAppDeployButton"] {display: none !important;}
     </style>
     """,
     unsafe_allow_html=True
