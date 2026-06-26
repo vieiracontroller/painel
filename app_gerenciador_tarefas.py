@@ -319,7 +319,10 @@ def render_dashboard():
     documentos_fixos = carregar_documentos_fixos()
     arquivos = carregar_arquivos_escritorio()
 
-    df_clientes = df_from_data(clientes)
+    # FILTRO: Apenas clientes ativos
+    clientes_ativos = [c for c in clientes if c.get("status_cadastro") == "Ativo"]
+    
+    df_clientes = df_from_data(clientes_ativos)
     df_tarefas = df_from_data(tarefas)
     df_documentos_fixos = df_from_data(documentos_fixos)
     df_arquivos = df_from_data(arquivos)
@@ -663,87 +666,90 @@ def render_cadastrar_cliente():
                     st.error(f"Erro ao salvar cadastro: {e}")
 
 # ============================================================================
-# MÓDULO: VISUALIZAÇÕES - GERENCIAR OBRIGAÇÕES
+# MÓDULO: VISUALIZAÇÕES - CENTRAL DE OBRIGAÇÕES (UNIFICADA)
 # ============================================================================
 
-def render_gerenciar_obrigacoes():
-    st.title("🗂️ Gerenciar Obrigações (Contador)")
-    st.markdown("Use este formulário para cadastrar as obrigações de cada cliente diretamente na tabela de tarefas.")
+def render_central_obrigacoes():
+    """
+    Tela unificada para gerenciar obrigações automáticas e customizadas.
+    Combina: geração automática por mês + criação manual de obrigações avulsas.
+    """
+    st.title("🗂️ Central de Obrigações")
+    st.markdown("Gerencie as obrigações do mês e crie obrigações customizadas conforme necessário.")
 
     clientes = carregar_clientes()
     if not clientes:
         st.warning("Cadastre ao menos um cliente antes de lançar obrigações.")
         return
 
-    with st.form("form_gerenciar_obrigacoes"):
-        cliente_selecionado = st.selectbox("Selecione o Cliente:", [c["nome"] for c in clientes])
-        nome_ob = st.text_input("Nome da Obrigação (ex: DAS - Simples Nacional, DCTFWeb, FGTS / SEFIP, Folha de Pagamento)")
-        col1, col2 = st.columns(2)
-        with col1:
-            mes_comp = st.selectbox("Mês de Competência:", LISTA_MESES, index=datetime.now().month - 1)
-        with col2:
-            ano_comp = st.selectbox("Ano de Competência:", LISTA_ANOS, index=1)
-        vencimento = st.date_input("Data de Vencimento")
-        periodicidade = st.selectbox("Periodicidade:", ["Mensal", "Trimestral", "Anual", "Eventual"], index=0)
+    hoje = datetime.now()
+    mes_atual = LISTA_MESES[hoje.month - 1]
+    ano_atual = str(hoje.year)
 
-        if st.form_submit_button("Cadastrar Obrigação"):
-            if not nome_ob:
-                st.error("Preencha o nome da obrigação.")
+    # --- SEÇÃO 1: GERAÇÃO AUTOMÁTICA ---
+    st.subheader("📋 Geração Automática de Obrigações do Mês")
+    st.markdown("Clique para gerar automaticamente as obrigações padrão para todos os clientes ativos neste mês.")
+    
+    col_gerador1, col_gerador2, col_gerador3 = st.columns([2, 2, 1])
+    
+    with col_gerador1:
+        mes_gerador = st.selectbox("Mês para geração:", LISTA_MESES, index=LISTA_MESES.index(mes_atual), key="mes_gerador")
+    
+    with col_gerador2:
+        ano_gerador = st.selectbox("Ano para geração:", LISTA_ANOS, index=LISTA_ANOS.index(ano_atual) if ano_atual in LISTA_ANOS else 0, key="ano_gerador")
+    
+    with col_gerador3:
+        st.write("")
+        if st.button("⚙️ Gerar", key="btn_gerar_obrigacoes"):
+            resultado = gerar_obrigacoes_mes(mes_gerador, ano_gerador)
+            if resultado["sucesso"]:
+                st.success(resultado["mensagem"])
+                st.rerun()
             else:
-                cliente_id = next(c["id"] for c in clientes if c["nome"] == cliente_selecionado)
-                supabase.table("tarefas").insert({
-                    "cliente_id": cliente_id,
-                    "obrigacao": nome_ob,
-                    "vencimento": vencimento.strftime("%Y-%m-%d"),
-                    "periodicidade": periodicidade,
-                    "mes": mes_comp,
-                    "ano": ano_comp,
-                    "alerta": "✅ Normal",
-                    "status": "Pendente"
-                }).execute()
-                st.success("Obrigação cadastrada com sucesso.")
-
-# ============================================================================
-# MÓDULO: VISUALIZAÇÕES - CONFIGURAR ACESSOS
-# ============================================================================
-
-def render_configurar_acessos():
-    st.title("🔑 Gerenciamento de Acessos")
-    st.markdown("Associe credenciais aos clientes e controle o perfil de acesso.")
-
-    clientes = carregar_clientes()
-    if not clientes:
-        st.warning("Cadastre ao menos um cliente antes de liberar acessos.")
-        return
-
-    with st.form("form_acesso"):
-        cliente_selecionado = st.selectbox("Cliente:", [c["nome"] for c in clientes])
-        email = st.text_input("E-mail/Usuário de Login")
-        senha = st.text_input("Senha Provisória", type="password")
-        perfil = st.selectbox("Perfil de Acesso:", ["cliente", "administrador"])
-
-        if st.form_submit_button("Gerar Usuário"):
-            if not email or not senha:
-                st.error("Preencha e-mail e senha para liberar o acesso.")
-            else:
-                cliente_id = next(c["id"] for c in clientes if c["nome"] == cliente_selecionado)
-                supabase.table("usuarios_clientes").insert({
-                    "cliente_id": cliente_id,
-                    "email": email,
-                    "senha": senha,
-                    "perfil": perfil
-                }).execute()
-                st.success("Acesso criado com sucesso.")
+                st.warning(resultado["mensagem"])
 
     st.markdown("---")
-    st.markdown("### Acessos já cadastrados")
-    acessos = carregar_acessos()
-    if acessos:
-        for acesso in acessos:
-            cliente_nome = acesso.get("clientes", {}).get("nome", "-") if acesso.get("clientes") else "-"
-            st.write(f"Usuário: **{acesso['email']}** | Cliente: **{cliente_nome}** | Perfil: **{acesso.get('perfil', 'cliente')}**")
-    else:
-        st.info("Nenhum acesso registrado ainda.")
+
+    # --- SEÇÃO 2: OBRIGAÇÃO CUSTOMIZADA/AVULSA ---
+    with st.expander("➕ Criar Obrigação Customizada / Avulsa", expanded=False):
+        st.markdown("Insira uma obrigação específica ou avulsa para um cliente.")
+        
+        with st.form("form_obrigacao_customizada"):
+            cliente_selecionado = st.selectbox("Selecione o Cliente:", [c["nome"] for c in clientes], key="sel_cliente_custom")
+            nome_ob = st.text_input("Nome do Imposto/Obrigação")
+            descricao_ob = st.text_area("Descrição da Obrigação (opcional)")
+            prazo_ob = st.text_input("Vencimento por extenso (ex: Até o dia 20)")
+            
+            col1, col2 = st.columns(2)
+            with col1:
+                periodicidade_ob = st.selectbox("Periodicidade:", ["Mensal", "Trimestral", "Anual", "Eventual"], index=0, key="sel_period_custom")
+            with col2:
+                alerta_ob = st.selectbox("Prioridade:", ["✅ Normal", "⚠️ Atenção", "🚨 Urgente"], index=0, key="sel_alerta_custom")
+            
+            col3, col4 = st.columns(2)
+            with col3:
+                mes_ob = st.selectbox("Mês de Competência:", LISTA_MESES, index=LISTA_MESES.index(mes_atual), key="mes_ob_custom")
+            with col4:
+                ano_ob = st.selectbox("Ano de Competência:", LISTA_ANOS, index=LISTA_ANOS.index(ano_atual) if ano_atual in LISTA_ANOS else 0, key="ano_ob_custom")
+
+            if st.form_submit_button("Lançar Obrigação Customizada"):
+                if not nome_ob or not prazo_ob:
+                    st.error("Preencha no mínimo: Nome da Obrigação e Vencimento.")
+                else:
+                    cliente_id = next(c["id"] for c in clientes if c["nome"] == cliente_selecionado)
+                    supabase.table("tarefas").insert({
+                        "cliente_id": cliente_id,
+                        "obrigacao": nome_ob,
+                        "descricao": descricao_ob if descricao_ob else None,
+                        "vencimento": prazo_ob,
+                        "periodicidade": periodicidade_ob,
+                        "mes": mes_ob,
+                        "ano": ano_ob,
+                        "alerta": alerta_ob,
+                        "status": "Pendente"
+                    }).execute()
+                    st.success("Obrigação customizada adicionada com sucesso!")
+                    st.rerun()
 
 # ============================================================================
 # MÓDULO: VISUALIZAÇÕES - BASE DE CLIENTES (COM CORREÇÃO DE APIError)
@@ -848,151 +854,102 @@ def render_base_clientes():
             except Exception as error:
                 st.error(f'Erro técnico ao comunicar com o Supabase: {error}')
 
-# ============================================================================
-# MÓDULO: VISUALIZAÇÕES - OBRIGAÇÕES CUSTOMIZADAS
-# ============================================================================
-
-def render_obrigacoes_customizadas():
-    st.title("⚙️ Obrigações Customizadas")
-    st.markdown("Crie obrigações manuais específicas para clientes e mantenha o painel atualizado.")
-
-    clientes = carregar_clientes()
-    if not clientes:
-        st.warning("Cadastre ao menos um cliente antes de lançar obrigações customizadas.")
-        return
-
-    with st.form("form_custom"):
-        cliente_selecionado = st.selectbox("Selecione o Cliente:", [c["nome"] for c in clientes])
-        nome_ob = st.text_input("Nome do Imposto/Obrigação")
-        descricao_ob = st.text_area("Descrição da Obrigação")
-        prazo_ob = st.text_input("Vencimento por extenso")
-        periodicidade_ob = st.selectbox("Periodicidade:", ["Mensal", "Trimestral", "Anual", "Eventual"], index=3)
-        mes_ob = st.selectbox("Mês:", LISTA_MESES, index=datetime.now().month - 1)
-        ano_ob = st.selectbox("Ano:", LISTA_ANOS, index=1)
-        alerta_ob = st.selectbox("Prioridade:", ["🚨 Urgente", "⚠️ Atenção", "✅ Normal"])
-
-        if st.form_submit_button("Lançar no Painel"):
-            if not nome_ob or not descricao_ob or not prazo_ob:
-                st.error("Preencha nome, descrição e prazo da obrigação.")
+    st.markdown("---")
+    st.subheader("🔐 Consultar Logins de Acesso")
+    
+    with st.expander("🔐 Consultar Logins de Acesso", expanded=False):
+        st.markdown("Consulte rapidamente os e-mails e credenciais de acesso dos clientes.")
+        
+        try:
+            acessos = carregar_acessos()
+            clientes_todos = carregar_clientes()
+            
+            if not acessos:
+                st.info("Nenhum acesso de cliente registrado ainda.")
             else:
-                cliente_id = next(c["id"] for c in clientes if c["nome"] == cliente_selecionado)
-                supabase.table("tarefas").insert({
-                    "cliente_id": cliente_id,
-                    "obrigacao": nome_ob,
-                    "descricao": descricao_ob,
-                    "vencimento": prazo_ob,
-                    "periodicidade": periodicidade_ob,
-                    "mes": mes_ob,
-                    "ano": ano_ob,
-                    "alerta": alerta_ob,
-                    "status": "Pendente"
-                }).execute()
-                st.success("Obrigação customizada adicionada ao painel.")
+                # Criar dataframe com os acessos
+                df_acessos = pd.DataFrame(acessos)
+                
+                # Consolidar com dados de clientes
+                df_clientes_login = pd.DataFrame(clientes_todos)
+                if not df_clientes_login.empty:
+                    df_consolidado_login = df_acessos.merge(
+                        df_clientes_login[['id', 'nome', 'cnpj', 'regime']],
+                        left_on='cliente_id',
+                        right_on='id',
+                        how='left',
+                        suffixes=('_acesso', '_cliente')
+                    )
+                else:
+                    df_consolidado_login = df_acessos.copy()
+                
+                # Opção de filtro
+                col_filtro1, col_filtro2 = st.columns(2)
+                
+                with col_filtro1:
+                    filtro_cliente_login = st.text_input("🔍 Filtrar por Nome:", placeholder="Digite o nome do cliente...", key="filtro_cliente_login")
+                
+                with col_filtro2:
+                    filtro_email_login = st.text_input("✉️ Filtrar por E-mail:", placeholder="Digite o e-mail...", key="filtro_email_login")
+                
+                # Aplicar filtros
+                df_exibicao_login = df_consolidado_login.copy()
+                
+                if filtro_cliente_login:
+                    df_exibicao_login = df_exibicao_login[df_exibicao_login['nome'].astype(str).str.contains(filtro_cliente_login, case=False, na=False)]
+                
+                if filtro_email_login:
+                    df_exibicao_login = df_exibicao_login[df_exibicao_login['email'].astype(str).str.contains(filtro_email_login, case=False, na=False)]
+                
+                # Selecionar colunas para exibição
+                colunas_exibicao_login = []
+                if 'nome' in df_exibicao_login.columns:
+                    colunas_exibicao_login.append('nome')
+                if 'cnpj' in df_exibicao_login.columns:
+                    colunas_exibicao_login.append('cnpj')
+                if 'regime' in df_exibicao_login.columns:
+                    colunas_exibicao_login.append('regime')
+                if 'email' in df_exibicao_login.columns:
+                    colunas_exibicao_login.append('email')
+                if 'perfil' in df_exibicao_login.columns:
+                    colunas_exibicao_login.append('perfil')
+                
+                # Renomear colunas
+                df_exibir_login = df_exibicao_login[colunas_exibicao_login].copy()
+                df_exibir_login.columns = ['Cliente', 'CNPJ', 'Regime', 'E-mail de Acesso', 'Perfil']
+                
+                # Exibir tabela
+                st.dataframe(df_exibir_login, use_container_width=True)
+                
+                # Estatísticas
+                col_stats1, col_stats2, col_stats3 = st.columns(3)
+                
+                with col_stats1:
+                    total_acessos_login = len(df_exibicao_login)
+                    st.metric("Total de Acessos", total_acessos_login)
+                
+                with col_stats2:
+                    acessos_clientes_login = len(df_exibicao_login[df_exibicao_login['perfil'] == 'cliente']) if 'perfil' in df_exibicao_login.columns else 0
+                    st.metric("Acessos de Clientes", acessos_clientes_login)
+                
+                with col_stats3:
+                    clientes_unicos_login = df_exibicao_login['cliente_id'].nunique() if 'cliente_id' in df_exibicao_login.columns else 0
+                    st.metric("Clientes Únicos", clientes_unicos_login)
+                
+                # Exportação
+                if st.button("📥 Exportar Acessos para CSV"):
+                    csv_login = df_exibir_login.to_csv(index=False)
+                    st.download_button(
+                        label="Baixar CSV",
+                        data=csv_login,
+                        file_name="acessos_clientes.csv",
+                        mime="text/csv"
+                    )
+        
+        except Exception as e:
+            st.error(f"Erro ao carregar dados de acessos: {e}")
 
-# ============================================================================
-# MÓDULO: VISUALIZAÇÕES - CONSULTA RÁPIDA DE LOGINS (NOVO)
-# ============================================================================
 
-def render_consulta_logins():
-    """
-    Seção nova para a Fernanda consultar rapidamente os e-mails de acesso
-    criados para os clientes na tabela 'usuarios_clientes'.
-    """
-    st.title("🔐 Consulta Rápida de Acessos de Clientes")
-    st.markdown("Ferramenta para consulta ágil de e-mails e credenciais de acesso dos clientes.")
-    
-    try:
-        acessos = carregar_acessos()
-        clientes = carregar_clientes()
-        
-        if not acessos:
-            st.info("Nenhum acesso de cliente registrado ainda.")
-            return
-        
-        # Criar dataframe com os acessos
-        df_acessos = pd.DataFrame(acessos)
-        
-        # Consolidar com dados de clientes
-        df_clientes = pd.DataFrame(clientes)
-        if not df_clientes.empty:
-            df_consolidado = df_acessos.merge(
-                df_clientes[['id', 'nome', 'cnpj', 'regime']],
-                left_on='cliente_id',
-                right_on='id',
-                how='left',
-                suffixes=('_acesso', '_cliente')
-            )
-        else:
-            df_consolidado = df_acessos.copy()
-        
-        # Opção de filtro
-        col_filtro1, col_filtro2 = st.columns(2)
-        
-        with col_filtro1:
-            filtro_cliente = st.text_input("🔍 Filtrar por Nome do Cliente:", placeholder="Digite o nome do cliente...")
-        
-        with col_filtro2:
-            filtro_email = st.text_input("✉️ Filtrar por E-mail:", placeholder="Digite o e-mail...")
-        
-        # Aplicar filtros
-        df_exibicao = df_consolidado.copy()
-        
-        if filtro_cliente:
-            df_exibicao = df_exibicao[df_exibicao['nome'].astype(str).str.contains(filtro_cliente, case=False, na=False)]
-        
-        if filtro_email:
-            df_exibicao = df_exibicao[df_exibicao['email'].astype(str).str.contains(filtro_email, case=False, na=False)]
-        
-        # Selecionar colunas para exibição
-        colunas_exibicao = []
-        if 'nome' in df_exibicao.columns:
-            colunas_exibicao.append('nome')
-        if 'cnpj' in df_exibicao.columns:
-            colunas_exibicao.append('cnpj')
-        if 'regime' in df_exibicao.columns:
-            colunas_exibicao.append('regime')
-        if 'email' in df_exibicao.columns:
-            colunas_exibicao.append('email')
-        if 'perfil' in df_exibicao.columns:
-            colunas_exibicao.append('perfil')
-        
-        # Renomear colunas para melhor legibilidade
-        df_exibir = df_exibicao[colunas_exibicao].copy()
-        df_exibir.columns = ['Cliente', 'CNPJ', 'Regime', 'E-mail de Acesso', 'Perfil']
-        
-        # Exibir com st.dataframe para melhor visualização
-        st.markdown("### 📋 Lista de Acessos de Clientes")
-        st.dataframe(df_exibir, use_container_width=True)
-        
-        # Estatísticas rápidas
-        st.markdown("---")
-        col_stats1, col_stats2, col_stats3 = st.columns(3)
-        
-        with col_stats1:
-            total_acessos = len(df_exibicao)
-            st.metric("Total de Acessos", total_acessos)
-        
-        with col_stats2:
-            acessos_clientes = len(df_exibicao[df_exibicao['perfil'] == 'cliente']) if 'perfil' in df_exibicao.columns else 0
-            st.metric("Acessos de Clientes", acessos_clientes)
-        
-        with col_stats3:
-            clientes_unicos = df_exibicao['cliente_id'].nunique() if 'cliente_id' in df_exibicao.columns else 0
-            st.metric("Clientes Únicos", clientes_unicos)
-        
-        # Exportação (opcional)
-        st.markdown("---")
-        if st.button("📥 Exportar para CSV"):
-            csv = df_exibir.to_csv(index=False)
-            st.download_button(
-                label="Baixar CSV",
-                data=csv,
-                file_name="acessos_clientes.csv",
-                mime="text/csv"
-            )
-    
-    except Exception as e:
-        st.error(f"Erro ao carregar dados de acessos: {e}")
 
 # ============================================================================
 # MÓDULO: PORTAL CLIENTE
@@ -1105,10 +1062,8 @@ else:
             "🏠 Dashboard Geral",
             "📤 Documentos e Tarefas",
             "➕ Cadastrar Cliente",
-            "🗂️ Gerenciar Obrigações",
-            "⚙️ Obrigações Customizadas",
-            "👥 Base de Clientes",
-            "🔐 Consulta de Acessos"
+            "🗂️ Central de Obrigações",
+            "👥 Base de Clientes"
         ])
 
         if opcao == "🏠 Dashboard Geral":
@@ -1117,14 +1072,10 @@ else:
             render_upload_documentos()
         elif opcao == "➕ Cadastrar Cliente":
             render_cadastrar_cliente()
-        elif opcao == "🗂️ Gerenciar Obrigações":
-            render_gerenciar_obrigacoes()
-        elif opcao == "⚙️ Obrigações Customizadas":
-            render_obrigacoes_customizadas()
+        elif opcao == "🗂️ Central de Obrigações":
+            render_central_obrigacoes()
         elif opcao == "👥 Base de Clientes":
             render_base_clientes()
-        elif opcao == "🔐 Consulta de Acessos":
-            render_consulta_logins()
     else:
         st.sidebar.write(f"Conectado como: **CLIENTE**")
         st.sidebar.markdown("---")
