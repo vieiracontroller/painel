@@ -179,7 +179,7 @@ def garantir_escritorio_id():
 
 
 def realizar_login(usuario, senha):
-    res = supabase.table("usuarios").select("*").eq("email", usuario).eq("senha", senha).limit(1).execute()
+    res = supabase.table("SEU_NOME_CORRETO_DA_TABELA").select("*").eq("email", usuario).eq("senha", senha).limit(1).execute()
     if res.data:
         dados_usuario = res.data[0]
         st.session_state.logado = True
@@ -767,7 +767,7 @@ def render_cadastrar_cliente():
                         "grupo_acesso": "Cliente"
                     }).execute()
 
-                    supabase.table("usuarios").insert({
+                    supabase.table("SEU_NOME_CORRETO_DA_TABELA").insert({
                         "escritorio_id": escritorio_id,
                         "cliente_id": cliente_id,
                         "nome": usuario_nome,
@@ -1444,7 +1444,7 @@ def render_portal_cliente():
                             supabase.table("usuarios_clientes").update({
                                 "senha": nova_senha
                             }).eq("id", int(usuario_logado['id'])).eq("escritorio_id", escritorio_id).execute()
-                            supabase.table("usuarios").update({
+                            supabase.table("SEU_NOME_CORRETO_DA_TABELA").update({
                                 "senha": nova_senha
                             }).eq("email", usuario_logado.get("email", "")).eq("escritorio_id", escritorio_id).execute()
                             st.success("Senha alterada com sucesso!")
@@ -1661,7 +1661,7 @@ def render_gestao_saas():
                 else:
                     try:
                         escritorio_id = mapa_escritorios[escritorio_label]
-                        supabase.table("usuarios").insert({
+                        supabase.table("SEU_NOME_CORRETO_DA_TABELA").insert({
                             "escritorio_id": escritorio_id,
                             "nome": nome_admin,
                             "email": email_admin,
