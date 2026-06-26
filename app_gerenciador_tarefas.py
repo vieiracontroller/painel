@@ -1766,6 +1766,72 @@ def render_gestao_saas():
                     except Exception as e:
                         st.error(f"Erro ao salvar o plano: {str(e)}")
 
+    st.markdown("---")
+    st.subheader("📋 Planos Atuais e Edição")
+    try:
+        planos_cadastrados = carregar_planos_saas()
+    except Exception:
+        planos_cadastrados = []
+
+    if planos_cadastrados:
+        df_planos = pd.DataFrame(planos_cadastrados)
+        if not df_planos.empty:
+            if "valor" not in df_planos.columns and "valor_mensal" in df_planos.columns:
+                df_planos["valor"] = df_planos["valor_mensal"]
+            if "modulos_liberados" in df_planos.columns:
+                df_planos["modulos_liberados"] = df_planos["modulos_liberados"].apply(
+                    lambda itens: ", ".join(itens) if isinstance(itens, list) else str(itens or "-")
+                )
+
+            colunas_exibicao_planos = [col for col in ["id", "nome", "valor", "modulos_liberados"] if col in df_planos.columns]
+            st.dataframe(df_planos[colunas_exibicao_planos], use_container_width=True)
+
+        mapa_planos_edicao = {}
+        opcoes_planos_edicao = []
+        for plano in planos_cadastrados:
+            nome_plano_db = str(plano.get("nome", "Plano")).strip()
+            valor_plano_db = float(to_python_scalar(plano.get("valor", plano.get("valor_mensal", 0)) or 0))
+            label_plano = f"{nome_plano_db} - R$ {valor_plano_db:,.2f}"
+            opcoes_planos_edicao.append(label_plano)
+            mapa_planos_edicao[label_plano] = plano
+
+        plano_selecionado_label = st.selectbox("Selecione o plano para editar", opcoes_planos_edicao, key="sel_plano_edicao")
+        plano_selecionado = mapa_planos_edicao.get(plano_selecionado_label, {})
+
+        if plano_selecionado:
+            with st.form("form_editar_plano"):
+                nome_plano_edit = st.text_input("Nome do Plano", value=str(plano_selecionado.get("nome", "")))
+                valor_plano_edit = st.number_input(
+                    "Valor Mensal",
+                    min_value=0.0,
+                    step=50.0,
+                    format="%.2f",
+                    value=float(to_python_scalar(plano_selecionado.get("valor", plano_selecionado.get("valor_mensal", 0)) or 0))
+                )
+                modulos_atuais = plano_selecionado.get("modulos_liberados", [])
+                if not isinstance(modulos_atuais, list):
+                    modulos_atuais = []
+                modulos_edit = st.multiselect(
+                    "Permissões / Módulos Liberados",
+                    ["Dashboard Geral", "Documentos e Tarefas", "Cadastrar Cliente", "Central de Obrigações", "Base de Clientes", "Financeiro", "Gestão SaaS"],
+                    default=modulos_atuais,
+                    key="mods_edicao_plano"
+                )
+
+                if st.form_submit_button("Atualizar Plano"):
+                    try:
+                        supabase.table("planos_saas").update({
+                            "nome": nome_plano_edit,
+                            "valor": float(valor_plano_edit),
+                            "modulos_liberados": list(modulos_edit)
+                        }).eq("id", int(to_python_scalar(plano_selecionado.get("id")))).execute()
+                        st.success("Plano atualizado com sucesso.")
+                        st.rerun()
+                    except Exception as e:
+                        st.error(f"Erro ao atualizar o plano: {str(e)}")
+    else:
+        st.info("Nenhum plano cadastrado ainda.")
+
     with st.expander("🏢 Cadastrar Novo Escritório", expanded=True):
         try:
             planos_cadastrados = carregar_planos_saas()
