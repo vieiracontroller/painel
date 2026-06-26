@@ -2019,17 +2019,18 @@ def render_gestao_saas():
                 else:
                     try:
                         escritorio_id = mapa_escritorios[escritorio_label]
-                        supabase.table("usuarios_escritorio").insert({
-                            "escritorio_id": escritorio_id,
+                        payload_admin = {
                             "nome": nome_admin,
                             "email": email_admin,
+                            "grupo_acesso": "Gestão",
+                            "escritorio_id": escritorio_id,
                             "senha": senha_admin,
-                            "perfil": "escritorio",
-                            "grupo_acesso": "Gestão"
-                        }).execute()
+                            "perfil": "escritorio"
+                        }
+                        supabase.table("usuarios_escritorio").insert(payload_admin).execute()
                         st.success("Administrador do escritório cadastrado com sucesso.")
                     except Exception as e:
-                        st.error(f"Erro ao cadastrar administrador: {e}")
+                        st.error(f"Erro: {e}")
 
 # ============================================================================
 # FLUXO PRINCIPAL - AUTENTICAÇÃO E NAVEGAÇÃO
