@@ -437,7 +437,7 @@ def obter_perfil_usuario(usuario_email):
 
 
 def render_branding_sidebar():
-    st.sidebar.image("logo.png", use_container_width=True)
+    st.sidebar.image("logo1.png", use_container_width=True)
     st.sidebar.markdown(" ")
     st.sidebar.markdown("---")
 
@@ -2396,7 +2396,7 @@ def render_meu_acesso():
 if not st.session_state.logado:
     col1, col2, col3 = st.columns([1, 2, 1])
     with col2:
-        st.image("logo.png", width=280)
+        st.image("logo1.png", width=280)
         with st.form("form_login"):
             usuario = st.text_input("Usuário ou E-mail")
             senha = st.text_input("Senha", type="password")
