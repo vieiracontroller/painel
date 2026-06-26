@@ -6,7 +6,7 @@ from calendar import monthrange
 from supabase import create_client, Client
 from streamlit_option_menu import option_menu
 
-ADMIN_MASTER_EMAIL = str(st.secrets.get("admin_master_email", "fernanda@vcontroll.com.br")).strip().lower()
+ADMIN_MASTER_EMAIL = str(st.secrets.get("admin_master_email", "vieiracontroller@gmail.com")).strip().lower()
 
 # ============================================================================
 # CONFIGURAÇÃO DE IDENTIDADE VISUAL - V-CONTROLL HUB
@@ -199,11 +199,11 @@ def garantir_usuario_master_vieira():
         if escritorio_id is None:
             return
 
-        login_master = "vieiracontroller"
+        login_master = "vieiracontroller@gmail.com"
         senha_master = "123456"
         payload_master = {
             "escritorio_id": escritorio_id,
-            "usuario": login_master,
+            "usuario": "vieiracontroller",
             "email": login_master,
             "senha": senha_master,
             "perfil": "Master"
@@ -212,7 +212,7 @@ def garantir_usuario_master_vieira():
         res_usuario = (
             supabase.table("NOME_CERTO_DA_SUA_TABELA")
             .select("id")
-            .or_(f"email.eq.{login_master},usuario.eq.{login_master}")
+            .or_(f"email.eq.{login_master},usuario.eq.vieiracontroller")
             .eq("escritorio_id", escritorio_id)
             .limit(1)
             .execute()
