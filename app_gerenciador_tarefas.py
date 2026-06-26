@@ -1275,150 +1275,6 @@ def render_base_clientes():
 
 
 def render_financeiro():
-    perfil_sessao = str(st.session_state.get("perfil", "")).strip().lower()
-    eh_admin_master = perfil_sessao == "admin"
-
-    if eh_admin_master:
-        st.title("📊 Financeiro")
-        st.markdown("Painel SaaS com controle de mensalidades dos escritórios parceiros.")
-
-        def valor_plano_assinatura(plano_nome: str) -> float:
-            plano = str(plano_nome or "").strip().lower()
-            if "enterprise" in plano:
-                return 799.0
-            if "pro" in plano:
-                return 399.0
-            if "starter" in plano:
-                return 0.0
-            return 0.0
-
-        def proximo_vencimento_padrao() -> str:
-            hoje = datetime.now()
-            mes = hoje.month + 1
-            ano = hoje.year
-            if mes > 12:
-                mes = 1
-                ano += 1
-            return datetime(ano, mes, 10).strftime("%Y-%m-%d")
-
-        try:
-            try:
-                res_escritorios = (
-                    supabase.table("escritorios")
-                    .select("id,nome,plano,status,valor_assinatura,proximo_vencimento,status_pagamento")
-                    .order("nome")
-                    .execute()
-                )
-                escritorios = res_escritorios.data or []
-                colunas_financeiras_disponiveis = True
-            except Exception as e_colunas:
-                st.warning("Algumas colunas financeiras ainda nao existem na tabela escritorios. Mostrando visao com campos padrao.")
-                st.info(f"Detalhe tecnico: {e_colunas}")
-                res_escritorios = (
-                    supabase.table("escritorios")
-                    .select("id,nome,plano,status")
-                    .order("nome")
-                    .execute()
-                )
-                escritorios = res_escritorios.data or []
-                colunas_financeiras_disponiveis = False
-
-            if not escritorios:
-                st.info("Nenhum escritório parceiro encontrado para controle de assinaturas.")
-                return
-
-            linhas_tabela = []
-            total_ativos = 0
-            faturamento_estimado = 0.0
-
-            for esc in escritorios:
-                status_escritorio = str(esc.get("status", "")).strip() or "-"
-                plano_escritorio = str(esc.get("plano", "-")).strip() or "-"
-                valor_assinatura = esc.get("valor_assinatura")
-                if valor_assinatura is None:
-                    valor_assinatura = valor_plano_assinatura(plano_escritorio)
-                valor_assinatura = float(to_python_scalar(valor_assinatura) or 0)
-
-                prox_venc = esc.get("proximo_vencimento")
-                if prox_venc is None or str(prox_venc).strip() == "":
-                    prox_venc = proximo_vencimento_padrao()
-
-                status_pag = str(esc.get("status_pagamento") or "Em Aberto").strip() or "Em Aberto"
-
-                if status_escritorio.lower() == "ativo":
-                    total_ativos += 1
-                    faturamento_estimado += valor_assinatura
-
-                linhas_tabela.append({
-                    "id": to_python_scalar(esc.get("id")),
-                    "Código": to_python_scalar(esc.get("id")),
-                    "Nome do Escritório": str(esc.get("nome", "-")).strip() or "-",
-                    "Plano Contratado": plano_escritorio,
-                    "Valor da Assinatura": valor_assinatura,
-                    "Próximo Vencimento": str(prox_venc),
-                    "Status do Pagamento": status_pag
-                })
-
-            m1, m2 = st.columns(2)
-            with m1:
-                st.metric("Faturamento Mensal Estimado (R$)", f"R$ {faturamento_estimado:,.2f}")
-            with m2:
-                st.metric("Total de Escritórios Ativos", total_ativos)
-
-            st.markdown("---")
-            st.subheader("💳 Controle de Mensalidades dos Parceiros")
-
-            df_saas = pd.DataFrame(linhas_tabela)
-            df_editado = st.data_editor(
-                df_saas,
-                hide_index=True,
-                use_container_width=True,
-                disabled=["id", "Código", "Nome do Escritório", "Plano Contratado", "Valor da Assinatura", "Próximo Vencimento"],
-                column_config={
-                    "Valor da Assinatura": st.column_config.NumberColumn(format="R$ %.2f"),
-                    "Status do Pagamento": st.column_config.SelectboxColumn(
-                        "Status do Pagamento",
-                        options=["Pago", "Em Aberto", "Atrasado"]
-                    )
-                },
-                key="editor_mensalidades_saas"
-            )
-
-            if st.button("💾 Salvar Status de Pagamento", key="salvar_status_pagamentos_saas"):
-                alteracoes = 0
-                try:
-                    for _, linha in df_editado.iterrows():
-                        codigo = to_python_scalar(linha.get("id"))
-                        status_novo = str(linha.get("Status do Pagamento", "")).strip() or "Em Aberto"
-
-                        status_antigo_series = df_saas.loc[df_saas["id"] == codigo, "Status do Pagamento"]
-                        status_antigo = str(status_antigo_series.iloc[0]).strip() if not status_antigo_series.empty else ""
-                        if status_novo == status_antigo:
-                            continue
-
-                        supabase.table("escritorios").update({
-                            "status_pagamento": status_novo
-                        }).eq("id", int(codigo)).execute()
-                        alteracoes += 1
-
-                    if alteracoes:
-                        st.success(f"{alteracoes} status de pagamento atualizados com sucesso.")
-                        st.rerun()
-                    else:
-                        st.info("Nenhuma alteracao de status para salvar.")
-                except Exception as e_update:
-                    st.error(f"Erro ao salvar status de pagamento: {e_update}")
-                    st.warning("Se a coluna status_pagamento ainda nao existir em escritorios, crie-a no Supabase e recarregue o schema.")
-
-            if not colunas_financeiras_disponiveis:
-                st.caption("Sugestao de colunas financeiras para evolucao da tabela escritorios: valor_assinatura (numeric), proximo_vencimento (date), status_pagamento (text).")
-
-            return
-        except Exception as e:
-            st.error(f"Nao foi possivel carregar o painel financeiro SaaS: {e}")
-            st.warning("Verifique se as colunas financeiras existem na tabela escritorios e se o schema do PostgREST esta atualizado.")
-            return
-
     escritorio_id = garantir_escritorio_id()
     st.title("📊 Financeiro")
     st.markdown("Central financeira do escritório com contas a receber, contas a pagar e honorários dos clientes.")
@@ -1524,58 +1380,6 @@ def render_financeiro():
                             "mes": mes_ref,
                             "ano": ano_ref
                         })
-                except Exception:
-                    pass
-
-                # Integra receitas de assinaturas SaaS no caixa da Vieira Controller (escritorio_id = 1).
-                try:
-                    if int(to_python_scalar(escritorio_id) or 0) == 1:
-                        def _valor_assinatura_por_plano(plano_nome: str) -> float:
-                            plano_txt = str(plano_nome or "").strip().lower()
-                            if "enterprise" in plano_txt:
-                                return 799.0
-                            if "pro" in plano_txt:
-                                return 399.0
-                            if "starter" in plano_txt:
-                                return 0.0
-                            return 0.0
-
-                        try:
-                            escritorios_pago = (
-                                supabase.table("escritorios")
-                                .select("id,nome,plano,status_pagamento,valor_assinatura")
-                                .eq("status_pagamento", "Pago")
-                                .execute()
-                                .data
-                                or []
-                            )
-                        except Exception:
-                            escritorios_pago = (
-                                supabase.table("escritorios")
-                                .select("id,nome,plano,status_pagamento")
-                                .eq("status_pagamento", "Pago")
-                                .execute()
-                                .data
-                                or []
-                            )
-
-                        for escritorio_saas in escritorios_pago:
-                            valor_saas = escritorio_saas.get("valor_assinatura")
-                            if valor_saas is None:
-                                valor_saas = _valor_assinatura_por_plano(escritorio_saas.get("plano", ""))
-
-                            recebimentos.append({
-                                "id": None,
-                                "cliente_id": None,
-                                "tipo": "Receita SaaS",
-                                "descricao": f"Receita SaaS - {str(escritorio_saas.get('nome', '-')).strip() or '-'}",
-                                "valor": float(to_python_scalar(valor_saas) or 0),
-                                "data_vencimento": "-",
-                                "status": "Pago",
-                                "data_pagamento": datetime.now().strftime("%Y-%m-%d"),
-                                "mes": mes_ref,
-                                "ano": ano_ref
-                            })
                 except Exception:
                     pass
 
@@ -1770,18 +1574,26 @@ def render_financeiro():
 
                 st.markdown("---")
                 st.markdown("### 📌 Resumo Consolidado")
-                fluxo_caixa_estimado = total_previsto_receber - total_previsto_pagar
+                receita_saas_pago = obter_total_receita_saas_paga() if int(to_python_scalar(escritorio_id) or 0) == 1 else 0.0
+                total_receitas_consolidadas = total_previsto_receber + receita_saas_pago
+                fluxo_caixa_estimado = total_receitas_consolidadas - total_previsto_pagar
                 c_res_1, c_res_2 = st.columns(2)
                 with c_res_1:
-                    st.metric("Total de Receitas", f"R$ {total_previsto_receber:,.2f}")
+                    st.metric("Total de Receitas", f"R$ {total_receitas_consolidadas:,.2f}")
                 with c_res_2:
                     st.metric("Fluxo de Caixa Estimado do Mês", f"R$ {fluxo_caixa_estimado:,.2f}")
 
-                df_fluxo = pd.DataFrame([
-                    {"Categoria": "Receitas", "Valor": total_previsto_receber},
+                linhas_fluxo = [
+                    {"Categoria": "Receitas Operacionais", "Valor": total_previsto_receber},
+                ]
+                if receita_saas_pago > 0:
+                    linhas_fluxo.append({"Categoria": "Receita SaaS (Pago)", "Valor": receita_saas_pago})
+                linhas_fluxo.extend([
                     {"Categoria": "Despesas", "Valor": total_previsto_pagar},
                     {"Categoria": "Saldo", "Valor": fluxo_caixa_estimado},
                 ])
+
+                df_fluxo = pd.DataFrame(linhas_fluxo)
                 fig_fluxo = px.bar(df_fluxo, x="Categoria", y="Valor", color="Categoria", title="Fluxo de Caixa Consolidado")
                 st.plotly_chart(fig_fluxo, use_container_width=True)
 
@@ -1789,6 +1601,192 @@ def render_financeiro():
                 st.info("A área financeira não pôde ser carregada no momento.")
     except Exception:
         st.info("Não foi possível abrir a área financeira neste momento.")
+
+
+def obter_total_receita_saas_paga() -> float:
+    def _valor_assinatura_por_plano(plano_nome: str) -> float:
+        plano = str(plano_nome or "").strip().lower()
+        if "enterprise" in plano:
+            return 799.0
+        if "pro" in plano:
+            return 399.0
+        if "starter" in plano:
+            return 0.0
+        return 0.0
+
+    try:
+        try:
+            escritorios_pago = (
+                supabase.table("escritorios")
+                .select("id,nome,plano,status_pagamento,valor_assinatura")
+                .eq("status_pagamento", "Pago")
+                .execute()
+                .data
+                or []
+            )
+        except Exception:
+            escritorios_pago = (
+                supabase.table("escritorios")
+                .select("id,nome,plano,status_pagamento")
+                .eq("status_pagamento", "Pago")
+                .execute()
+                .data
+                or []
+            )
+
+        total = 0.0
+        for esc in escritorios_pago:
+            valor = esc.get("valor_assinatura")
+            if valor is None:
+                valor = _valor_assinatura_por_plano(esc.get("plano", ""))
+            total += float(to_python_scalar(valor) or 0)
+        return total
+    except Exception:
+        return 0.0
+
+
+def render_financeiro_saas():
+    if str(st.session_state.get("perfil", "")).strip().lower() != "admin":
+        st.error("Acesso restrito ao administrador master.")
+        return
+
+    st.title("💳 Financeiro SaaS")
+    st.markdown("Controle de faturamento das mensalidades dos escritórios parceiros.")
+
+    def valor_plano_assinatura(plano_nome: str) -> float:
+        plano = str(plano_nome or "").strip().lower()
+        if "enterprise" in plano:
+            return 799.0
+        if "pro" in plano:
+            return 399.0
+        if "starter" in plano:
+            return 0.0
+        return 0.0
+
+    def proximo_vencimento_padrao() -> str:
+        hoje = datetime.now()
+        mes = hoje.month + 1
+        ano = hoje.year
+        if mes > 12:
+            mes = 1
+            ano += 1
+        return datetime(ano, mes, 10).strftime("%Y-%m-%d")
+
+    try:
+        try:
+            res_escritorios = (
+                supabase.table("escritorios")
+                .select("id,nome,plano,status,valor_assinatura,proximo_vencimento,status_pagamento")
+                .order("nome")
+                .execute()
+            )
+            escritorios = res_escritorios.data or []
+            colunas_financeiras_disponiveis = True
+        except Exception as e_colunas:
+            st.warning("Algumas colunas financeiras ainda nao existem na tabela escritorios. Mostrando visao com campos padrao.")
+            st.info(f"Detalhe tecnico: {e_colunas}")
+            res_escritorios = (
+                supabase.table("escritorios")
+                .select("id,nome,plano,status")
+                .order("nome")
+                .execute()
+            )
+            escritorios = res_escritorios.data or []
+            colunas_financeiras_disponiveis = False
+
+        if not escritorios:
+            st.info("Nenhum escritório parceiro encontrado para controle de assinaturas.")
+            return
+
+        linhas_tabela = []
+        total_ativos = 0
+        faturamento_estimado = 0.0
+
+        for esc in escritorios:
+            status_escritorio = str(esc.get("status", "")).strip() or "-"
+            plano_escritorio = str(esc.get("plano", "-")).strip() or "-"
+            valor_assinatura = esc.get("valor_assinatura")
+            if valor_assinatura is None:
+                valor_assinatura = valor_plano_assinatura(plano_escritorio)
+            valor_assinatura = float(to_python_scalar(valor_assinatura) or 0)
+
+            prox_venc = esc.get("proximo_vencimento")
+            if prox_venc is None or str(prox_venc).strip() == "":
+                prox_venc = proximo_vencimento_padrao()
+
+            status_pag = str(esc.get("status_pagamento") or "Em Aberto").strip() or "Em Aberto"
+
+            if status_escritorio.lower() == "ativo":
+                total_ativos += 1
+                faturamento_estimado += valor_assinatura
+
+            linhas_tabela.append({
+                "id": to_python_scalar(esc.get("id")),
+                "Código": to_python_scalar(esc.get("id")),
+                "Nome do Escritório": str(esc.get("nome", "-")).strip() or "-",
+                "Plano Contratado": plano_escritorio,
+                "Valor da Assinatura": valor_assinatura,
+                "Próximo Vencimento": str(prox_venc),
+                "Status do Pagamento": status_pag
+            })
+
+        m1, m2 = st.columns(2)
+        with m1:
+            st.metric("Faturamento Mensal Estimado (R$)", f"R$ {faturamento_estimado:,.2f}")
+        with m2:
+            st.metric("Total de Escritórios Ativos", total_ativos)
+
+        st.markdown("---")
+        st.subheader("💳 Controle de Mensalidades dos Parceiros")
+
+        df_saas = pd.DataFrame(linhas_tabela)
+        df_editado = st.data_editor(
+            df_saas,
+            hide_index=True,
+            use_container_width=True,
+            disabled=["id", "Código", "Nome do Escritório", "Plano Contratado", "Valor da Assinatura", "Próximo Vencimento"],
+            column_config={
+                "Valor da Assinatura": st.column_config.NumberColumn(format="R$ %.2f"),
+                "Status do Pagamento": st.column_config.SelectboxColumn(
+                    "Status do Pagamento",
+                    options=["Pago", "Em Aberto", "Atrasado"]
+                )
+            },
+            key="editor_mensalidades_saas"
+        )
+
+        if st.button("💾 Salvar Status de Pagamento", key="salvar_status_pagamentos_saas"):
+            alteracoes = 0
+            try:
+                for _, linha in df_editado.iterrows():
+                    codigo = to_python_scalar(linha.get("id"))
+                    status_novo = str(linha.get("Status do Pagamento", "")).strip() or "Em Aberto"
+
+                    status_antigo_series = df_saas.loc[df_saas["id"] == codigo, "Status do Pagamento"]
+                    status_antigo = str(status_antigo_series.iloc[0]).strip() if not status_antigo_series.empty else ""
+                    if status_novo == status_antigo:
+                        continue
+
+                    supabase.table("escritorios").update({
+                        "status_pagamento": status_novo
+                    }).eq("id", int(codigo)).execute()
+                    alteracoes += 1
+
+                if alteracoes:
+                    st.success(f"{alteracoes} status de pagamento atualizados com sucesso.")
+                    st.rerun()
+                else:
+                    st.info("Nenhuma alteracao de status para salvar.")
+            except Exception as e_update:
+                st.error(f"Erro ao salvar status de pagamento: {e_update}")
+                st.warning("Se a coluna status_pagamento ainda nao existir em escritorios, crie-a no Supabase e recarregue o schema.")
+
+        if not colunas_financeiras_disponiveis:
+            st.caption("Sugestao de colunas financeiras para evolucao da tabela escritorios: valor_assinatura (numeric), proximo_vencimento (date), status_pagamento (text).")
+
+    except Exception as e:
+        st.error(f"Nao foi possivel carregar o painel financeiro SaaS: {e}")
+        st.warning("Verifique se as colunas financeiras existem na tabela escritorios e se o schema do PostgREST esta atualizado.")
 
 # ============================================================================
 # MÓDULO: PORTAL CLIENTE
@@ -2409,6 +2407,8 @@ else:
             opcoes_menu = ["Dashboard Geral", "Documentos e Tarefas", "Cadastrar Cliente", "Central de Obrigações", "Base de Clientes", "Financeiro", "👤 Meu Acesso"]
             icones_menu = ["house", "file-earmark-check", "plus-circle", "calendar-check", "people", "currency-dollar", "person-circle"]
             if st.session_state.get("is_admin_master", False):
+                opcoes_menu.append("💳 Financeiro SaaS")
+                icones_menu.append("credit-card")
                 opcoes_menu.append("Gestão SaaS")
                 icones_menu.append("gear-wide-connected")
 
@@ -2449,6 +2449,8 @@ else:
             render_financeiro()
         elif escolha == "👤 Meu Acesso":
             render_meu_acesso()
+        elif escolha == "💳 Financeiro SaaS":
+            render_financeiro_saas()
         elif escolha == "Gestão SaaS":
             render_gestao_saas()
     else:
