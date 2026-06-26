@@ -2,6 +2,7 @@ import streamlit as st
 import pandas as pd
 import plotly.express as px
 import os
+import time
 from datetime import datetime
 from calendar import monthrange
 from supabase import create_client, Client
@@ -440,13 +441,11 @@ def obter_perfil_usuario(usuario_email):
 def render_branding_sidebar():
     try:
         if os.path.exists("logo.png"):
-            st.sidebar.image("logo.png", use_container_width=True)
-        elif os.path.exists("logo1.png"):
-            st.sidebar.image("logo1.png", use_container_width=True)
-        else:
-            st.sidebar.subheader("V-CONTROLL Hub")
+            _cache_buster_sidebar = int(time.time())
+            with open("logo.png", "rb") as logo_file:
+                st.sidebar.image(logo_file.read(), use_container_width=True)
     except Exception:
-        st.sidebar.subheader("V-CONTROLL Hub")
+        pass
     st.sidebar.markdown(" ")
     st.sidebar.markdown("---")
 
@@ -2407,13 +2406,11 @@ if not st.session_state.logado:
     with col2:
         try:
             if os.path.exists("logo.png"):
-                st.image("logo.png", width=280)
-            elif os.path.exists("logo1.png"):
-                st.image("logo1.png", width=280)
-            else:
-                st.subheader("V-CONTROLL Hub")
+                _cache_buster_login = int(time.time())
+                with open("logo.png", "rb") as logo_file:
+                    st.image(logo_file.read(), width=280)
         except Exception:
-            st.subheader("V-CONTROLL Hub")
+            pass
         with st.form("form_login"):
             usuario = st.text_input("Usuário ou E-mail")
             senha = st.text_input("Senha", type="password")
