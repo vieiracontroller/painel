@@ -1108,232 +1108,210 @@ def render_base_clientes():
         if perfil_usuario != "Gestão" and st.session_state.perfil != "escritorio":
             st.error("❌ Erro: Acesso restrito apenas para o perfil de Gestão.")
         else:
-            st.markdown("Acompanhe o faturamento mensal, serviços extras e baixas de pagamento.")
+            st.markdown("Módulo unificado com contas a receber e contas a pagar para o mês atual.")
 
             hoje = datetime.now()
             mes_ref = LISTA_MESES[hoje.month - 1]
             ano_ref = str(hoje.year)
-
             clientes_ativos = [c for c in carregar_clientes() if c.get("status_cadastro") == "Ativo"]
-            df_clientes_fin = pd.DataFrame(clientes_ativos)
 
-            if not df_clientes_fin.empty:
-                financeiros_mes = supabase.table("financeiro_mensal").select("*").eq("mes", mes_ref).eq("ano", ano_ref).execute().data or []
-                df_fin_mes = pd.DataFrame(financeiros_mes)
+            try:
+                recebimentos = supabase.table("financeiro_mensal").select("*").eq("mes", mes_ref).eq("ano", ano_ref).execute().data or []
+            except Exception as e:
+                st.error(f"Erro ao carregar contas a receber: {e}")
+                recebimentos = []
 
-                total_honorarios = 0.0
-                clientes_com_honorario = 0
-                for _, cliente_row in df_clientes_fin.iterrows():
-                    valor_hon = float(to_python_scalar(cliente_row.get("valor_honorario", 0) or 0))
-                    if valor_hon > 0:
-                        total_honorarios += valor_hon
-                        clientes_com_honorario += 1
+            try:
+                despesas = supabase.table("contas_a_pagar").select("*").eq("mes", mes_ref).eq("ano", ano_ref).execute().data or []
+            except Exception:
+                despesas = []
 
-                total_extras = 0.0
-                if not df_fin_mes.empty:
-                    df_extras_prev = df_fin_mes[df_fin_mes["tipo"].astype(str) == "Serviço Extra"].copy()
-                    if not df_extras_prev.empty and "valor" in df_extras_prev.columns:
-                        total_extras = float(pd.to_numeric(df_extras_prev["valor"], errors="coerce").fillna(0).sum())
+            df_receber = pd.DataFrame(recebimentos)
+            if not df_receber.empty:
+                if "status" not in df_receber.columns:
+                    df_receber["status"] = "Pendente"
+                if "valor" not in df_receber.columns:
+                    df_receber["valor"] = 0
+                df_receber["status"] = df_receber["status"].fillna("Pendente").astype(str)
+                df_receber["valor"] = pd.to_numeric(df_receber["valor"], errors="coerce").fillna(0)
 
-                faturamento_previsto = total_honorarios + total_extras
+            df_pagar = pd.DataFrame(despesas)
+            if not df_pagar.empty:
+                if "status" not in df_pagar.columns:
+                    df_pagar["status"] = "Pendente"
+                if "valor" not in df_pagar.columns:
+                    df_pagar["valor"] = 0
+                df_pagar["status"] = df_pagar["status"].fillna("Pendente").astype(str)
+                df_pagar["valor"] = pd.to_numeric(df_pagar["valor"], errors="coerce").fillna(0)
 
-                col_met1, col_met2, col_met3 = st.columns(3)
-                with col_met1:
-                    st.metric("Faturamento Mensal Previsto", f"R$ {faturamento_previsto:,.2f}")
-                with col_met2:
-                    st.metric("Total de Clientes Contratantes", clientes_com_honorario)
-                with col_met3:
-                    ticket_medio = faturamento_previsto / clientes_com_honorario if clientes_com_honorario > 0 else 0
-                    st.metric("Ticket Médio", f"R$ {ticket_medio:,.2f}")
+            total_previsto_receber = float(df_receber["valor"].sum()) if not df_receber.empty else 0.0
+            total_recebido = float(df_receber[df_receber["status"] == "Pago"]["valor"].sum()) if not df_receber.empty else 0.0
+            total_pendente_receber = float(df_receber[df_receber["status"] == "Pendente"]["valor"].sum()) if not df_receber.empty else 0.0
 
-                st.markdown("---")
-                st.markdown(f"### Faturamento do Mês de Referência: {mes_ref}/{ano_ref}")
+            total_previsto_pagar = float(df_pagar["valor"].sum()) if not df_pagar.empty else 0.0
+            total_pago_pagar = float(df_pagar[df_pagar["status"] == "Pago"]["valor"].sum()) if not df_pagar.empty else 0.0
+            total_pendente_pagar = float(df_pagar[df_pagar["status"] == "Pendente"]["valor"].sum()) if not df_pagar.empty else 0.0
 
-                mapa_clientes = {}
-                for _, cliente_row in df_clientes_fin.iterrows():
-                    cid = int(to_python_scalar(cliente_row.get("id")))
-                    mapa_clientes[cid] = str(cliente_row.get("nome", "-"))
+            tab_receber, tab_pagar = st.tabs(["💰 Contas a Receber", "💸 Contas a Pagar"])
 
-                linhas_faturamento = []
+            with tab_receber:
+                st.markdown(f"### 💰 Contas a Receber - {mes_ref}/{ano_ref}")
+                c1, c2, c3 = st.columns(3)
+                with c1:
+                    st.metric("Total Previsto", f"R$ {total_previsto_receber:,.2f}")
+                with c2:
+                    st.metric("Total Recebido", f"R$ {total_recebido:,.2f}")
+                with c3:
+                    st.metric("Total Pendente", f"R$ {total_pendente_receber:,.2f}")
 
-                for _, cliente_row in df_clientes_fin.iterrows():
-                    cliente_id = int(to_python_scalar(cliente_row.get("id")))
-                    cliente_nome = str(cliente_row.get("nome", "-"))
-                    valor_hon = float(to_python_scalar(cliente_row.get("valor_honorario", 0) or 0))
-                    if valor_hon <= 0:
-                        continue
+                if not df_receber.empty:
+                    cols_receber = [col for col in ["id", "cliente_id", "tipo", "descricao", "valor", "data_vencimento", "status", "data_pagamento"] if col in df_receber.columns]
+                    st.dataframe(df_receber[cols_receber], use_container_width=True)
 
-                    dia_venc = int(float(to_python_scalar(cliente_row.get("dia_vencimento", 20) or 20)))
-                    data_venc_hon = gerar_data_vencimento(ano_ref, mes_ref, dia_venc)
-
-                    reg_mens = None
-                    if not df_fin_mes.empty:
-                        filtro_mens = df_fin_mes[
-                            (df_fin_mes["tipo"].astype(str) == "Mensalidade") &
-                            (pd.to_numeric(df_fin_mes["cliente_id"], errors="coerce") == cliente_id)
-                        ]
-                        if not filtro_mens.empty:
-                            reg_mens = filtro_mens.iloc[0]
-
-                    linhas_faturamento.append({
-                        "id_financeiro": int(to_python_scalar(reg_mens["id"])) if reg_mens is not None and pd.notna(reg_mens.get("id")) else None,
-                        "cliente_id": cliente_id,
-                        "Empresa": cliente_nome,
-                        "Tipo": "Mensalidade",
-                        "Descrição": f"Mensalidade {mes_ref}/{ano_ref}",
-                        "Valor": valor_hon,
-                        "Data de Vencimento": str(reg_mens.get("data_vencimento")) if reg_mens is not None and reg_mens.get("data_vencimento") else data_venc_hon,
-                        "Status": str(reg_mens.get("status", "Pendente")) if reg_mens is not None else "Pendente",
-                        "Data de Pagamento": str(reg_mens.get("data_pagamento", "")) if reg_mens is not None else ""
-                    })
-
-                if not df_fin_mes.empty:
-                    df_extras = df_fin_mes[df_fin_mes["tipo"].astype(str) == "Serviço Extra"].copy()
-                    for _, extra_row in df_extras.iterrows():
-                        extra_cliente_id = int(float(to_python_scalar(extra_row.get("cliente_id", 0) or 0)))
-                        linhas_faturamento.append({
-                            "id_financeiro": int(float(to_python_scalar(extra_row.get("id")))) if pd.notna(extra_row.get("id")) else None,
-                            "cliente_id": extra_cliente_id,
-                            "Empresa": mapa_clientes.get(extra_cliente_id, "-"),
-                            "Tipo": "Serviço Extra",
-                            "Descrição": str(extra_row.get("descricao", "Serviço Extra")),
-                            "Valor": float(to_python_scalar(extra_row.get("valor", 0) or 0)),
-                            "Data de Vencimento": str(extra_row.get("data_vencimento", "")),
-                            "Status": str(extra_row.get("status", "Pendente")),
-                            "Data de Pagamento": str(extra_row.get("data_pagamento", ""))
-                        })
-
-                df_lancamentos = pd.DataFrame(linhas_faturamento)
-                if not df_lancamentos.empty:
-                    df_exibir = df_lancamentos[["Empresa", "Tipo", "Descrição", "Valor", "Data de Vencimento", "Status", "Data de Pagamento"]].copy()
-                    df_exibir["Valor"] = pd.to_numeric(df_exibir["Valor"], errors="coerce").fillna(0)
-                    st.dataframe(df_exibir, use_container_width=True)
-
-                    st.markdown("### ✅ Controle de Baixas")
-                    pendentes = df_lancamentos[df_lancamentos["Status"].astype(str) != "Pago"].copy()
-                    if pendentes.empty:
-                        st.success("Nenhum lançamento pendente para baixa.")
+                    st.markdown("### ✅ Baixar Recebimento")
+                    pendentes_receber = df_receber[df_receber["status"] == "Pendente"].copy()
+                    if pendentes_receber.empty:
+                        st.success("Nenhum recebimento pendente para baixa.")
                     else:
-                        opcoes = []
-                        for idx, row in pendentes.iterrows():
-                            opcoes.append((idx, f"{row['Empresa']} | {row['Tipo']} | {row['Descrição']} | R$ {float(row['Valor']):,.2f}"))
-
-                        idx_sel = st.selectbox(
-                            "Selecione o lançamento para marcar como pago:",
-                            options=[o[0] for o in opcoes],
-                            format_func=lambda x: dict(opcoes)[x],
-                            key="sel_baixa_lancamento"
-                        )
-
-                        if st.button("Marcar como Pago", key="btn_marcar_pago"):
-                            try:
-                                lanc = pendentes.loc[idx_sel]
-                                cliente_id_pag = int(float(to_python_scalar(lanc["cliente_id"])))
-                                valor_pag = float(to_python_scalar(lanc["Valor"]))
-                                id_fin = lanc["id_financeiro"]
-                                data_atual = datetime.now().isoformat()
-
-                                if lanc["Tipo"] == "Serviço Extra":
-                                    if id_fin is None:
-                                        raise ValueError("Lançamento de serviço extra sem ID financeiro.")
-                                    id_fin_int = int(float(to_python_scalar(id_fin)))
-                                    supabase.table("financeiro_mensal").update({
-                                        "status": "Pago",
-                                        "data_pagamento": data_atual
-                                    }).eq("id", id_fin_int).execute()
-                                else:
-                                    if id_fin is None:
-                                        supabase.table("financeiro_mensal").insert({
-                                            "cliente_id": cliente_id_pag,
-                                            "tipo": "Mensalidade",
-                                            "descricao": str(lanc["Descrição"]),
-                                            "valor": valor_pag,
-                                            "mes": mes_ref,
-                                            "ano": ano_ref,
-                                            "data_vencimento": str(lanc["Data de Vencimento"]),
-                                            "status": "Pago",
-                                            "data_pagamento": data_atual,
-                                            "data_lancamento": datetime.now().strftime("%Y-%m-%d")
-                                        }).execute()
-                                    else:
-                                        id_fin_int = int(float(to_python_scalar(id_fin)))
+                        for idx, row in pendentes_receber.iterrows():
+                            row_id = int(float(to_python_scalar(row.get("id")))) if pd.notna(row.get("id")) else None
+                            if row_id is None:
+                                continue
+                            col_info, col_btn = st.columns([5, 1])
+                            with col_info:
+                                st.write(
+                                    f"{str(row.get('descricao', '-'))} | R$ {float(to_python_scalar(row.get('valor', 0) or 0)):,.2f} | Venc: {str(row.get('data_vencimento', '-'))}"
+                                )
+                            with col_btn:
+                                if st.button("Marcar como Pago", key=f"btn_receber_pago_{row_id}_{idx}"):
+                                    try:
+                                        data_atual = datetime.now().isoformat()
                                         supabase.table("financeiro_mensal").update({
                                             "status": "Pago",
                                             "data_pagamento": data_atual
-                                        }).eq("id", id_fin_int).execute()
-
-                                st.success("Lançamento marcado como pago com sucesso!")
-                                st.rerun()
-                            except Exception as e:
-                                st.error(f"Erro ao marcar pagamento: {e}")
+                                        }).eq("id", int(row_id)).execute()
+                                        st.success("Recebimento atualizado como pago.")
+                                        st.rerun()
+                                    except Exception as e:
+                                        st.error(f"Erro ao baixar recebimento: {e}")
                 else:
-                    st.info("Nenhum lançamento financeiro encontrado para o mês de referência.")
+                    st.info("Nenhum lançamento encontrado em contas a receber para o mês atual.")
 
                 st.markdown("---")
                 st.markdown("### 📝 Lançar Serviço Extra")
-
                 with st.expander("➕ Criar Serviço Extra / Cobrança Avulsa", expanded=False):
                     with st.form("form_servico_extra"):
-                        cliente_extra = st.selectbox("Cliente:", [c["nome"] for c in clientes_ativos], key="sel_cliente_extra")
-                        nome_servico = st.text_input("Nome do Serviço (ex: Abertura, Alteração, DECORE)", key="nome_serv_extra")
-                        valor_servico = st.number_input("Valor (R$):", min_value=0.0, step=50.0, format="%.2f", key="valor_serv_extra")
+                        if not clientes_ativos:
+                            st.warning("Não há clientes ativos para lançamento de serviço extra.")
+                            st.form_submit_button("Lançar Serviço Extra", disabled=True)
+                        else:
+                            cliente_extra = st.selectbox("Cliente:", [c["nome"] for c in clientes_ativos], key="sel_cliente_extra")
+                            nome_servico = st.text_input("Nome do Serviço (ex: Abertura, Alteração, DECORE)", key="nome_serv_extra")
+                            valor_servico = st.number_input("Valor (R$):", min_value=0.0, step=50.0, format="%.2f", key="valor_serv_extra")
+                            data_venc_extra = st.date_input("Data de Vencimento", value=datetime.now(), key="data_venc_extra")
 
-                        col_mes_extra1, col_mes_extra2 = st.columns(2)
-                        with col_mes_extra1:
-                            mes_extra = st.selectbox("Mês de Referência:", LISTA_MESES, index=datetime.now().month - 1, key="mes_extra")
-                        with col_mes_extra2:
-                            ano_extra = st.selectbox("Ano de Referência:", LISTA_ANOS, index=LISTA_ANOS.index(ano_ref) if ano_ref in LISTA_ANOS else 0, key="ano_extra")
+                            if st.form_submit_button("Lançar Serviço Extra"):
+                                if not nome_servico or float(to_python_scalar(valor_servico)) <= 0:
+                                    st.error("Preencha descrição e valor da cobrança.")
+                                else:
+                                    cliente_id_extra = next((c["id"] for c in clientes_ativos if c["nome"] == cliente_extra), None)
+                                    if cliente_id_extra is not None:
+                                        try:
+                                            supabase.table("financeiro_mensal").insert({
+                                                "cliente_id": int(to_python_scalar(cliente_id_extra)),
+                                                "tipo": "Serviço Extra",
+                                                "descricao": nome_servico,
+                                                "valor": float(to_python_scalar(valor_servico)),
+                                                "mes": mes_ref,
+                                                "ano": ano_ref,
+                                                "data_vencimento": data_venc_extra.strftime("%Y-%m-%d"),
+                                                "status": "Pendente",
+                                                "data_lancamento": datetime.now().strftime("%Y-%m-%d")
+                                            }).execute()
+                                            st.success("Serviço extra lançado com sucesso!")
+                                            st.rerun()
+                                        except Exception as e:
+                                            st.error(f"Erro ao lançar serviço extra: {e}")
 
-                        data_venc_extra = st.date_input("Data de Vencimento", value=datetime.now(), key="data_venc_extra")
+            with tab_pagar:
+                st.markdown(f"### 💸 Contas a Pagar - {mes_ref}/{ano_ref}")
+                p1, p2, p3 = st.columns(3)
+                with p1:
+                    st.metric("Total a Pagar", f"R$ {total_previsto_pagar:,.2f}")
+                with p2:
+                    st.metric("Total Pago", f"R$ {total_pago_pagar:,.2f}")
+                with p3:
+                    st.metric("Total Pendente", f"R$ {total_pendente_pagar:,.2f}")
 
-                        if st.form_submit_button("Lançar Serviço Extra"):
-                            if not nome_servico or valor_servico <= 0:
-                                st.error("Preencha nome e valor do serviço.")
-                            elif not data_venc_extra:
-                                st.error("A Data de Vencimento é obrigatória.")
+                with st.expander("➕ Lançar Nova Despesa", expanded=False):
+                    with st.form("form_nova_despesa"):
+                        desp_descricao = st.text_input("Descrição")
+                        desp_fornecedor = st.text_input("Fornecedor")
+                        desp_categoria = st.selectbox(
+                            "Categoria",
+                            ["TI/Softwares", "Infraestrutura/Aluguel", "Pessoal/Pró-labore", "Impostos", "Marketing", "Outros"]
+                        )
+                        desp_valor = st.number_input("Valor (R$)", min_value=0.0, step=50.0, format="%.2f")
+                        desp_venc = st.date_input("Data de Vencimento", value=datetime.now(), key="data_venc_despesa")
+
+                        if st.form_submit_button("Salvar Despesa"):
+                            if not desp_descricao or not desp_fornecedor or float(to_python_scalar(desp_valor)) <= 0:
+                                st.error("Preencha descrição, fornecedor e valor da despesa.")
                             else:
-                                cliente_id_extra = next((c["id"] for c in clientes_ativos if c["nome"] == cliente_extra), None)
-                                if cliente_id_extra:
+                                try:
+                                    supabase.table("contas_a_pagar").insert({
+                                        "descricao": desp_descricao,
+                                        "fornecedor": desp_fornecedor,
+                                        "categoria": desp_categoria,
+                                        "valor": float(to_python_scalar(desp_valor)),
+                                        "data_vencimento": desp_venc.strftime("%Y-%m-%d"),
+                                        "status": "Pendente",
+                                        "mes": mes_ref,
+                                        "ano": ano_ref,
+                                        "data_lancamento": datetime.now().strftime("%Y-%m-%d")
+                                    }).execute()
+                                    st.success("Despesa lançada com sucesso!")
+                                    st.rerun()
+                                except Exception as e:
+                                    st.error(f"Erro ao lançar despesa: {e}")
+
+                if not df_pagar.empty:
+                    cols_pagar = [col for col in ["id", "descricao", "fornecedor", "categoria", "valor", "data_vencimento", "status", "data_pagamento"] if col in df_pagar.columns]
+                    st.dataframe(df_pagar[cols_pagar], use_container_width=True)
+
+                    st.markdown("### ✅ Baixa de Despesas")
+                    pendentes_pagar = df_pagar[df_pagar["status"] == "Pendente"].copy()
+                    if pendentes_pagar.empty:
+                        st.success("Nenhuma despesa pendente para baixar.")
+                    else:
+                        for idx, row in pendentes_pagar.iterrows():
+                            desp_id = int(float(to_python_scalar(row.get("id")))) if pd.notna(row.get("id")) else None
+                            if desp_id is None:
+                                continue
+                            col_info, col_btn = st.columns([5, 1])
+                            with col_info:
+                                st.write(
+                                    f"{str(row.get('descricao', '-'))} | {str(row.get('fornecedor', '-'))} | R$ {float(to_python_scalar(row.get('valor', 0) or 0)):,.2f}"
+                                )
+                            with col_btn:
+                                if st.button("Baixar Despesa", key=f"btn_baixar_desp_{desp_id}_{idx}"):
                                     try:
-                                        supabase.table("financeiro_mensal").insert({
-                                            "cliente_id": int(to_python_scalar(cliente_id_extra)),
-                                            "tipo": "Serviço Extra",
-                                            "descricao": nome_servico,
-                                            "valor": float(to_python_scalar(valor_servico)),
-                                            "mes": mes_extra,
-                                            "ano": str(ano_extra),
-                                            "data_vencimento": data_venc_extra.strftime("%Y-%m-%d"),
-                                            "status": "Pendente",
-                                            "data_lancamento": datetime.now().strftime("%Y-%m-%d")
-                                        }).execute()
-                                        st.success("Serviço extra lançado com sucesso!")
+                                        data_atual = datetime.now().isoformat()
+                                        supabase.table("contas_a_pagar").update({
+                                            "status": "Pago",
+                                            "data_pagamento": data_atual
+                                        }).eq("id", int(desp_id)).execute()
+                                        st.success("Despesa baixada com sucesso.")
                                         st.rerun()
                                     except Exception as e:
-                                        st.error(f"Erro ao lançar serviço: {e}")
+                                        st.error(f"Erro ao baixar despesa: {e}")
+                else:
+                    st.info("Nenhuma despesa registrada em contas a pagar para o mês atual.")
 
-                st.markdown("---")
-                st.markdown("### 📎 Anexar NF / Recibo / Fatura")
-
-                with st.expander("📎 Anexar Documentos Fiscais", expanded=False):
-                    with st.form("form_anexo_financeiro"):
-                        cliente_anexo = st.selectbox("Cliente:", [c["nome"] for c in clientes_ativos], key="sel_cliente_anexo")
-                        mes_anexo = st.selectbox("Mês:", LISTA_MESES, index=datetime.now().month - 1, key="mes_anexo")
-                        ano_anexo = st.selectbox("Ano:", LISTA_ANOS, key="ano_anexo")
-                        arquivo_anexo = st.file_uploader("Upload NF/Recibo/Fatura (PDF/JPG/PNG):", type=["pdf", "jpg", "png", "jpeg"], key="upload_anexo")
-
-                        if st.form_submit_button("Salvar Anexo"):
-                            if not arquivo_anexo:
-                                st.error("Anexe um arquivo.")
-                            else:
-                                cliente_id_anexo = next((c["id"] for c in clientes_ativos if c["nome"] == cliente_anexo), None)
-                                if cliente_id_anexo:
-                                    try:
-                                        nome_arquivo = f"{cliente_id_anexo}_{mes_anexo}_{ano_anexo}_{arquivo_anexo.name}"
-                                        st.success(f"Anexo {nome_arquivo} associado com sucesso!")
-                                    except Exception as e:
-                                        st.error(f"Erro ao salvar anexo: {e}")
-            else:
-                st.info("Nenhum cliente ativo para exibir financeiro.")
+            st.markdown("---")
+            st.markdown("### 📌 Resumo Consolidado")
+            fluxo_caixa_estimado = total_previsto_receber - total_previsto_pagar
+            st.metric("Fluxo de Caixa Estimado do Mês", f"R$ {fluxo_caixa_estimado:,.2f}")
 
 
 
