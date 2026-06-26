@@ -11,15 +11,21 @@ from streamlit_option_menu import option_menu
 st.markdown(
     """
     <style>
-    /* Esconde o menu de compartilhamento, edição e ícones do Streamlit no topo */
-    #MainMenu {visibility: hidden !important;}
-    header {visibility: hidden !important;}
+    /* Esconde apenas os itens de administração dentro do header */
+    #MainMenu,
+    header,
+    .stAppDeployButton,
+    [data-testid="stToolbar"],
+    [data-testid="stHeader"] {
+        display: none !important;
+    }
 
-    /* Esconde o botão de Deploy/Gerenciar aplicativo no canto inferior direito */
-    .stAppDeployButton {display: none !important;}
-
-    /* Esconde o menu de opções (pontinhos) que aparece na barra superior */
-    [data-testid="stToolbar"] {visibility: hidden !important;}
+    /* FORÇA o botão de abrir o menu lateral a ficar visível e posicionado */
+    button[aria-label="Toggle navigation"] {
+        display: flex !important;
+        visibility: visible !important;
+        z-index: 9999 !important;
+    }
     </style>
     """,
     unsafe_allow_html=True
