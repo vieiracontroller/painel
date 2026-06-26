@@ -1,6 +1,7 @@
 import streamlit as st
 import pandas as pd
 import plotly.express as px
+from pathlib import Path
 from datetime import datetime
 from calendar import monthrange
 from supabase import create_client, Client
@@ -524,7 +525,14 @@ def gerar_obrigacoes_mes(mes: str, ano: str):
 
 def render_dashboard():
     escritorio_id = garantir_escritorio_id()
-    st.title("🐴 📊 V-Controll Hub - Painel de Controle")
+    if Path("logo.png").exists():
+        col1, col2 = st.columns([1, 4])
+        with col1:
+            st.image("logo.png", width=120)
+        with col2:
+            st.title("Painel de Controle")
+    else:
+        st.title("Painel de Controle")
     st.markdown("Bem-vindo(a) ao centro de monitoramento integrado da Vieira Controller. Acompanhe clientes, tarefas e documentos em tempo real.")
 
     hoje = datetime.now()
