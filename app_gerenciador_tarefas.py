@@ -271,13 +271,15 @@ def realizar_login(usuario, senha):
             usuario_dados = None
 
     if usuario_dados:
+        perfil_banco = str(usuario_dados.get('perfil') or '').strip().lower()
+        eh_admin = perfil_banco in {"admin", "master"} or str(usuario_dados.get('email') or '').strip().lower() == ADMIN_MASTER_EMAIL
         st.session_state['usuario_logado'] = usuario_dados
         st.session_state['usuario_logado_email'] = str(usuario_dados.get('email') or usuario_dados.get('usuario') or usuario).strip()
         st.session_state['escritorio_id'] = usuario_dados.get('escritorio_id') or usuario_dados.get('id_escritorio') or 1
         st.session_state.logado = True
-        st.session_state.perfil = "escritorio"
+        st.session_state.perfil = "admin" if eh_admin else "escritorio"
         st.session_state.cliente_id_logado = None
-        st.session_state.is_admin_master = st.session_state['usuario_logado_email'].lower() == ADMIN_MASTER_EMAIL
+        st.session_state.is_admin_master = eh_admin
         st.success("Login realizado com sucesso!")
         st.rerun()
     else:
@@ -1273,9 +1275,8 @@ def render_base_clientes():
 
 
 def render_financeiro():
-    usuario_logado = st.session_state.get("usuario_logado") or {}
-    perfil_login = str(usuario_logado.get("perfil", "")).strip().lower()
-    eh_admin_master = bool(st.session_state.get("is_admin_master", False)) or perfil_login in {"admin", "master"}
+    perfil_sessao = str(st.session_state.get("perfil", "")).strip().lower()
+    eh_admin_master = perfil_sessao == "admin"
 
     if eh_admin_master:
         st.title("📊 Financeiro")
@@ -2300,7 +2301,7 @@ if not st.session_state.logado:
             if st.form_submit_button("Entrar", use_container_width=True):
                 realizar_login(usuario, senha)
 else:
-    if st.session_state.perfil == "escritorio":
+    if st.session_state.perfil in {"escritorio", "admin"}:
         render_branding_sidebar()
         with st.sidebar:
             opcoes_menu = ["Dashboard Geral", "Documentos e Tarefas", "Cadastrar Cliente", "Central de Obrigações", "Base de Clientes", "Financeiro", "👤 Meu Acesso"]
