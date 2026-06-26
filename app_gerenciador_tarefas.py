@@ -210,7 +210,7 @@ def garantir_usuario_master_vieira():
         }
 
         res_usuario = (
-            supabase.table("NOME_CERTO_DA_SUA_TABELA")
+            supabase.table("usuarios_escritorio")
             .select("id")
             .or_(f"email.eq.{login_master},usuario.eq.vieiracontroller")
             .eq("escritorio_id", escritorio_id)
@@ -221,9 +221,9 @@ def garantir_usuario_master_vieira():
         if res_usuario.data:
             usuario_id = res_usuario.data[0].get("id")
             if usuario_id is not None:
-                supabase.table("NOME_CERTO_DA_SUA_TABELA").update(payload_master).eq("id", int(usuario_id)).execute()
+                supabase.table("usuarios_escritorio").update(payload_master).eq("id", int(usuario_id)).execute()
         else:
-            supabase.table("NOME_CERTO_DA_SUA_TABELA").insert(payload_master).execute()
+            supabase.table("usuarios_escritorio").insert(payload_master).execute()
     except Exception:
         return
 
@@ -231,41 +231,27 @@ def garantir_usuario_master_vieira():
 def realizar_login(usuario, senha):
     garantir_usuario_master_vieira()
 
-    res = supabase.table("NOME_CERTO_DA_SUA_TABELA").select("*").eq("email", usuario).execute()
+    res = (
+        supabase.table("usuarios_escritorio")
+        .select("*")
+        .or_(f"email.eq.{usuario},usuario.eq.{usuario}")
+        .eq("senha", senha)
+        .limit(1)
+        .execute()
+    )
     if res.data:
-        dados_usuario = res.data[0]
-        senha_valida = str(dados_usuario.get("senha", "")) == str(senha)
-        if not senha_valida and str(usuario).strip().lower() != "vieiracontroller":
-            st.error("Usuário ou senha incorretos.")
-            return
-
+        usuario_dados = res.data[0]
+        st.session_state['usuario_logado'] = usuario_dados
+        st.session_state['usuario_logado_email'] = str(usuario_dados.get('email') or usuario_dados.get('usuario') or usuario).strip()
+        st.session_state['escritorio_id'] = usuario_dados.get('escritorio_id') or usuario_dados.get('id_escritorio') or 1
         st.session_state.logado = True
-        st.session_state.usuario_logado_email = str(dados_usuario.get("email") or dados_usuario.get("usuario") or usuario).strip()
-        st.session_state.escritorio_id = dados_usuario.get("escritorio_id")
-        st.session_state.is_admin_master = st.session_state.usuario_logado_email.lower() == ADMIN_MASTER_EMAIL
-
-        if st.session_state.escritorio_id is None and str(usuario).strip().lower() == "vieiracontroller":
-            st.session_state.escritorio_id = obter_escritorio_vieira_id()
-
-        perfil = str(dados_usuario.get("perfil", "escritorio")).strip().lower()
-        if perfil == "cliente":
-            st.session_state.perfil = "cliente"
-            st.session_state.cliente_id_logado = dados_usuario.get("cliente_id")
-        else:
-            st.session_state.perfil = "escritorio"
-            st.session_state.cliente_id_logado = None
-
-        if st.session_state.escritorio_id is None and not st.session_state.is_admin_master:
-            st.session_state.logado = False
-            st.session_state.perfil = None
-            st.session_state.cliente_id_logado = None
-            st.session_state.usuario_logado_email = None
-            st.error("Usuario sem escritorio vinculado. Contate o suporte.")
-            return
-
+        st.session_state.perfil = "escritorio"
+        st.session_state.cliente_id_logado = None
+        st.session_state.is_admin_master = st.session_state['usuario_logado_email'].lower() == ADMIN_MASTER_EMAIL
+        st.success("Login realizado com sucesso!")
         st.rerun()
-
-    st.error("Usuário ou senha incorretos.")
+    else:
+        st.error("Usuário ou senha incorretos.")
 
 # ============================================================================
 # MÓDULO: FUNÇÕES DE CARREGAMENTO DE DADOS
@@ -827,7 +813,7 @@ def render_cadastrar_cliente():
                         "grupo_acesso": "Cliente"
                     }).execute()
 
-                    supabase.table("NOME_CERTO_DA_SUA_TABELA").insert({
+                    supabase.table("usuarios_clientes").insert({
                         "escritorio_id": escritorio_id,
                         "cliente_id": cliente_id,
                         "nome": usuario_nome,
@@ -1504,7 +1490,7 @@ def render_portal_cliente():
                             supabase.table("usuarios_clientes").update({
                                 "senha": nova_senha
                             }).eq("id", int(usuario_logado['id'])).eq("escritorio_id", escritorio_id).execute()
-                            supabase.table("NOME_CERTO_DA_SUA_TABELA").update({
+                            supabase.table("usuarios_clientes").update({
                                 "senha": nova_senha
                             }).eq("email", usuario_logado.get("email", "")).eq("escritorio_id", escritorio_id).execute()
                             st.success("Senha alterada com sucesso!")
@@ -1721,7 +1707,7 @@ def render_gestao_saas():
                 else:
                     try:
                         escritorio_id = mapa_escritorios[escritorio_label]
-                        supabase.table("NOME_CERTO_DA_SUA_TABELA").insert({
+                        supabase.table("usuarios_escritorio").insert({
                             "escritorio_id": escritorio_id,
                             "nome": nome_admin,
                             "email": email_admin,
