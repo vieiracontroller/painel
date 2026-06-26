@@ -1754,15 +1754,17 @@ def render_gestao_saas():
                     st.error("Informe o nome do plano.")
                 else:
                     try:
-                        supabase.table("planos_saas").insert({
+                        permissoes_selecionadas = list(modulos_liberados)
+                        dados_plano = {
                             "nome": nome_plano,
-                            "valor_mensal": float(valor_mensal),
-                            "modulos_liberados": modulos_liberados
-                        }).execute()
+                            "valor": float(valor_mensal),
+                            "modulos_liberados": permissoes_selecionadas
+                        }
+                        supabase.table("planos_saas").insert(dados_plano).execute()
                         st.success("Plano cadastrado com sucesso.")
                         st.rerun()
-                    except Exception:
-                        st.info("Não foi possível salvar o plano neste momento.")
+                    except Exception as e:
+                        st.error(f"Erro ao salvar o plano: {str(e)}")
 
     with st.expander("🏢 Cadastrar Novo Escritório", expanded=True):
         try:
@@ -1775,7 +1777,7 @@ def render_gestao_saas():
             mapa_planos = {}
             for plano in planos_cadastrados:
                 nome_plano_db = str(plano.get("nome", "Plano")).strip()
-                valor_plano_db = float(to_python_scalar(plano.get("valor_mensal", 0) or 0))
+                valor_plano_db = float(to_python_scalar(plano.get("valor_mensal", plano.get("valor", 0)) or 0))
                 label_plano = f"{nome_plano_db} - R$ {valor_plano_db:,.2f}"
                 opcoes_planos.append(label_plano)
                 mapa_planos[label_plano] = plano
