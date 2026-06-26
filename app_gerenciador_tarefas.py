@@ -1829,6 +1829,21 @@ def render_gestao_saas():
                         st.rerun()
                     except Exception as e:
                         st.error(f"Erro ao atualizar o plano: {str(e)}")
+
+            st.markdown("---")
+            st.caption("Exclusão segura: planos vinculados a escritórios não podem ser removidos.")
+            if st.button("🗑️ Excluir Plano", key=f"btn_excluir_plano_{plano_selecionado.get('id')}"):
+                try:
+                    nome_plano_base = str(plano_selecionado.get("nome", "")).strip()
+                    vinculados = supabase.table("escritorios").select("id").eq("plano", nome_plano_base).execute().data or []
+                    if vinculados:
+                        st.warning("Este plano está em uso por um ou mais escritórios e não pode ser excluído.")
+                    else:
+                        supabase.table("planos_saas").delete().eq("id", int(to_python_scalar(plano_selecionado.get("id")))).execute()
+                        st.success("Plano excluído com sucesso.")
+                        st.rerun()
+                except Exception as e:
+                    st.error(f"Erro ao excluir o plano: {str(e)}")
     else:
         st.info("Nenhum plano cadastrado ainda.")
 
