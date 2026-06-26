@@ -1809,7 +1809,6 @@ def render_gestao_saas():
                 senha_bruta = str(usuario.get("senha") or "").strip()
                 usuario["escritorio_nome"] = mapa_escritorios.get(escritorio_ref, "-")
                 usuario["credencial"] = "Definida" if senha_bruta else "Nao definida"
-                usuario["senha"] = "********" if senha_bruta else "-"
 
             return usuarios
         except Exception as e:
