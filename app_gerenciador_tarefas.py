@@ -1489,6 +1489,58 @@ def render_financeiro():
                 except Exception:
                     recebimentos = []
 
+                # Integra receitas de assinaturas SaaS no caixa da Vieira Controller (escritorio_id = 1).
+                try:
+                    if int(to_python_scalar(escritorio_id) or 0) == 1:
+                        def _valor_assinatura_por_plano(plano_nome: str) -> float:
+                            plano_txt = str(plano_nome or "").strip().lower()
+                            if "enterprise" in plano_txt:
+                                return 799.0
+                            if "pro" in plano_txt:
+                                return 399.0
+                            if "starter" in plano_txt:
+                                return 0.0
+                            return 0.0
+
+                        try:
+                            escritorios_pago = (
+                                supabase.table("escritorios")
+                                .select("id,nome,plano,status_pagamento,valor_assinatura")
+                                .eq("status_pagamento", "Pago")
+                                .execute()
+                                .data
+                                or []
+                            )
+                        except Exception:
+                            escritorios_pago = (
+                                supabase.table("escritorios")
+                                .select("id,nome,plano,status_pagamento")
+                                .eq("status_pagamento", "Pago")
+                                .execute()
+                                .data
+                                or []
+                            )
+
+                        for escritorio_saas in escritorios_pago:
+                            valor_saas = escritorio_saas.get("valor_assinatura")
+                            if valor_saas is None:
+                                valor_saas = _valor_assinatura_por_plano(escritorio_saas.get("plano", ""))
+
+                            recebimentos.append({
+                                "id": None,
+                                "cliente_id": None,
+                                "tipo": "Mensalidade SaaS",
+                                "descricao": f"Mensalidade SaaS - {str(escritorio_saas.get('nome', '-')).strip() or '-'}",
+                                "valor": float(to_python_scalar(valor_saas) or 0),
+                                "data_vencimento": "-",
+                                "status": "Pago",
+                                "data_pagamento": datetime.now().strftime("%Y-%m-%d"),
+                                "mes": mes_ref,
+                                "ano": ano_ref
+                            })
+                except Exception:
+                    pass
+
                 try:
                     despesas = supabase.table("contas_a_pagar").select("*").eq("escritorio_id", escritorio_id).eq("mes", mes_ref).eq("ano", ano_ref).execute().data or []
                 except Exception:
