@@ -1225,12 +1225,54 @@ def carregar_solicitacoes_servicos(escritorio_id: int, cliente_id: int | None = 
         return []
 
 
+def carregar_catalogo_servicos(escritorio_id: int):
+    """Carrega catálogo de serviços pré-definidos do escritório."""
+    try:
+        return (
+            supabase.table("catalogo_servicos")
+            .select("*")
+            .eq("escritorio_id", int(escritorio_id))
+            .order("nome_servico")
+            .execute()
+            .data
+            or []
+        )
+    except Exception:
+        return []
+
+
+def salvar_item_catalogo_servico(escritorio_id: int, nome_servico: str, valor_padrao: float):
+    """Salva item no catálogo de serviços (com fallback resiliente de schema)."""
+    try:
+        payload = {
+            "escritorio_id": int(escritorio_id),
+            "nome_servico": str(nome_servico).strip(),
+            "valor_padrao": float(to_python_scalar(valor_padrao or 0) or 0),
+            "status": "Ativo"
+        }
+        try:
+            supabase.table("catalogo_servicos").insert(payload).execute()
+        except Exception:
+            # fallback para schema mínimo
+            supabase.table("catalogo_servicos").insert({
+                "escritorio_id": int(escritorio_id),
+                "nome_servico": str(nome_servico).strip(),
+                "valor_padrao": float(to_python_scalar(valor_padrao or 0) or 0)
+            }).execute()
+        return {"sucesso": True, "mensagem": "Serviço cadastrado no catálogo."}
+    except Exception as e:
+        return {"sucesso": False, "mensagem": f"Falha ao salvar catálogo: {e}"}
+
+
 def criar_solicitacao_servico(
     escritorio_id: int,
     cliente_id: int,
     titulo: str,
     descricao: str,
     prioridade: str,
+    servico_catalogo_id: int | None = None,
+    servico_nome: str = "",
+    valor_sugerido: float | None = None,
     solicitante_email: str = ""
 ):
     """Cria uma solicitação do portal do cliente para fila administrativa."""
@@ -1245,7 +1287,18 @@ def criar_solicitacao_servico(
             "solicitante_email": str(solicitante_email).strip(),
             "data_solicitacao": datetime.now().isoformat()
         }
-        supabase.table("solicitacoes_servicos").insert(payload).execute()
+        payload_ext = payload.copy()
+        payload_ext.update({
+            "servico_catalogo_id": int(servico_catalogo_id) if servico_catalogo_id is not None else None,
+            "servico_nome": str(servico_nome).strip(),
+            "valor_sugerido": float(to_python_scalar(valor_sugerido or 0) or 0)
+        })
+
+        try:
+            supabase.table("solicitacoes_servicos").insert(payload_ext).execute()
+        except Exception:
+            # fallback para schema mínimo sem as novas colunas
+            supabase.table("solicitacoes_servicos").insert(payload).execute()
         return {"sucesso": True, "mensagem": "Solicitação enviada com sucesso."}
     except Exception as e:
         return {"sucesso": False, "mensagem": f"Não foi possível enviar a solicitação: {e}"}
@@ -1307,7 +1360,7 @@ def processar_solicitacao_servico(
             hoje = datetime.now()
             mes_ref = LISTA_MESES[hoje.month - 1]
             ano_ref = str(hoje.year)
-            descricao_base = str(solic.get("titulo") or solic.get("descricao") or "Serviço Extra").strip()
+            descricao_base = str(solic.get("servico_nome") or solic.get("titulo") or solic.get("descricao") or "Serviço Extra").strip()
 
             supabase.table("contas_a_receber").insert({
                 "escritorio_id": int(escritorio_id),
@@ -2426,6 +2479,31 @@ def render_financeiro():
         st.markdown("---")
         st.subheader("📊 Gestão Financeira")
 
+        with st.expander("📚 Catálogo de Serviços (Admin)", expanded=False):
+            st.markdown("Cadastre serviços pré-definidos com valor sugerido para acelerar o processamento das demandas.")
+            with st.form("form_catalogo_servicos_admin"):
+                nome_catalogo = st.text_input("Nome do serviço", key="catalogo_nome_servico")
+                valor_catalogo = st.number_input("Valor sugerido/padrão (R$)", min_value=0.0, step=50.0, format="%.2f", key="catalogo_valor_padrao")
+                if st.form_submit_button("Salvar no Catálogo"):
+                    if not nome_catalogo.strip():
+                        st.error("Informe o nome do serviço.")
+                    else:
+                        resultado_cat = salvar_item_catalogo_servico(int(escritorio_id), nome_catalogo, float(valor_catalogo))
+                        if resultado_cat.get("sucesso"):
+                            sincronizar_cache_supabase()
+                            st.success("✅ Serviço cadastrado no catálogo.")
+                            st.rerun()
+                        else:
+                            st.error(resultado_cat.get("mensagem", "Falha ao salvar catálogo."))
+
+            catalogo_atual = carregar_catalogo_servicos(int(escritorio_id))
+            if catalogo_atual:
+                df_catalogo = pd.DataFrame(catalogo_atual)
+                cols_catalogo = [c for c in ["id", "nome_servico", "valor_padrao", "status"] if c in df_catalogo.columns]
+                st.dataframe(df_catalogo[cols_catalogo] if cols_catalogo else df_catalogo, use_container_width=True)
+            else:
+                st.info("Nenhum serviço cadastrado no catálogo ainda.")
+
         with st.expander("🧾 Serviços Extras (Demandas do Portal do Cliente)", expanded=False):
             try:
                 clientes_map = {int(to_python_scalar(c.get("id"))): str(c.get("nome", "-")).strip() or "-" for c in (clientes_base or []) if c.get("id") is not None}
@@ -2438,7 +2516,7 @@ def render_financeiro():
                         df_solic_admin["cliente_nome"] = df_solic_admin["cliente_id"].apply(
                             lambda cid: clientes_map.get(int(to_python_scalar(cid) or 0), f"Cliente ID {cid}")
                         )
-                    cols_admin = [c for c in ["id", "cliente_nome", "titulo", "descricao", "prioridade", "status", "data_solicitacao"] if c in df_solic_admin.columns]
+                    cols_admin = [c for c in ["id", "cliente_nome", "servico_nome", "titulo", "descricao", "prioridade", "valor_sugerido", "status", "data_solicitacao"] if c in df_solic_admin.columns]
                     st.dataframe(df_solic_admin[cols_admin] if cols_admin else df_solic_admin, use_container_width=True)
 
                     opcoes = []
@@ -2447,16 +2525,19 @@ def render_financeiro():
                         sid = int(to_python_scalar(item.get("id") or 0) or 0)
                         cid = int(to_python_scalar(item.get("cliente_id") or 0) or 0)
                         cliente_nome = clientes_map.get(cid, f"Cliente ID {cid}")
-                        titulo_item = str(item.get("titulo") or item.get("descricao") or "Solicitação").strip()
-                        label = f"#{sid} | {cliente_nome} | {titulo_item}"
+                        servico_nome = str(item.get("servico_nome") or item.get("titulo") or item.get("descricao") or "Solicitação").strip()
+                        label = f"#{sid} | {cliente_nome} | {servico_nome}"
                         opcoes.append(label)
                         mapa_solic[label] = item
 
                     with st.form("form_processar_solicitacao_servico"):
                         solic_label = st.selectbox("Selecionar solicitação", opcoes, key="sel_solic_admin")
+                        item_sel_preview = mapa_solic.get(solic_label, {})
+                        valor_sugerido_item = float(to_python_scalar(item_sel_preview.get("valor_sugerido") or 0) or 0)
+                        st.caption(f"Valor sugerido do catálogo: R$ {valor_sugerido_item:,.2f}")
                         cobrar_servico = st.checkbox("Cobrar", key="chk_cobrar_solic")
                         custo_zero = st.checkbox("Custo Zero", key="chk_custo_zero_solic")
-                        valor_solic = st.number_input("Valor do serviço (R$)", min_value=0.0, step=50.0, format="%.2f", key="valor_cob_solic")
+                        valor_solic = st.number_input("Valor final do serviço (R$)", min_value=0.0, step=50.0, format="%.2f", value=valor_sugerido_item, key="valor_cob_solic")
                         data_venc_solic = st.date_input("Data de vencimento (se cobrar)", value=datetime.now(), key="venc_cob_solic")
 
                         if st.form_submit_button("Processar Solicitação"):
@@ -2637,11 +2718,10 @@ def render_financeiro():
                     st.info(f"✅ {resultado_hon.get('mensagem')}")
 
 
-                st.markdown("Módulo unificado com contas a receber e contas a pagar para o mês atual.")
+                st.markdown("Módulo unificado com contas a receber e contas a pagar para o mês selecionado.")
 
-                hoje = datetime.now()
-                mes_ref = LISTA_MESES[hoje.month - 1]
-                ano_ref = str(hoje.year)
+                mes_ref = str(st.session_state.get("sel_mes_financeiro", LISTA_MESES[datetime.now().month - 1]))
+                ano_ref = str(st.session_state.get("sel_ano_financeiro", str(datetime.now().year)))
                 clientes_ativos = [c for c in carregar_clientes() if c.get("status_cadastro") == "Ativo"]
 
                 clientes_filtro_det = ["Todos os Clientes"] + [c.get("nome", "-") for c in clientes_ativos]
@@ -3321,13 +3401,40 @@ def render_portal_cliente():
         st.subheader("🛎️ Solicitar Serviço")
         st.markdown("Abra chamados para serviços extras. O escritório irá analisar e processar sua demanda.")
 
+        catalogo_cliente = carregar_catalogo_servicos(int(escritorio_id))
+        opcoes_catalogo = [str(item.get("nome_servico", "-")).strip() for item in catalogo_cliente if str(item.get("nome_servico", "")).strip()]
+        opcoes_catalogo = opcoes_catalogo + ["Outro"]
+
+        mapa_catalogo_por_nome = {
+            str(item.get("nome_servico", "")).strip(): item
+            for item in catalogo_cliente
+            if str(item.get("nome_servico", "")).strip()
+        }
+
         with st.form("form_solicitar_servico_cliente"):
-            titulo_solic = st.text_input("Título da solicitação", placeholder="Ex: Abertura de filial")
+            servico_sel = st.selectbox("Serviço do catálogo", opcoes_catalogo, key="sel_servico_catalogo_cliente")
+            servico_manual = ""
+            servico_catalogo_id = None
+            valor_sugerido = 0.0
+
+            if servico_sel == "Outro":
+                servico_manual = st.text_input("Descreva o serviço manualmente", placeholder="Ex: Retificação específica")
+                titulo_solic = st.text_input("Título da solicitação", placeholder="Ex: Serviço personalizado")
+            else:
+                item_cat = mapa_catalogo_por_nome.get(servico_sel, {})
+                servico_catalogo_id = int(to_python_scalar(item_cat.get("id") or 0) or 0) if item_cat else None
+                valor_sugerido = float(to_python_scalar(item_cat.get("valor_padrao") or 0) or 0) if item_cat else 0.0
+                st.caption(f"Valor sugerido: R$ {valor_sugerido:,.2f}")
+                titulo_solic = st.text_input("Título da solicitação", value=servico_sel)
+
             descricao_solic = st.text_area("Descreva o serviço solicitado", placeholder="Detalhe o que precisa e prazo desejado...")
             prioridade_solic = st.selectbox("Prioridade", ["Baixa", "Normal", "Alta", "Urgente"], index=1)
 
             if st.form_submit_button("Enviar Solicitação"):
-                if not titulo_solic.strip() or not descricao_solic.strip():
+                servico_final = servico_sel if servico_sel != "Outro" else servico_manual
+                if not str(servico_final).strip():
+                    st.error("Informe o serviço solicitado.")
+                elif not titulo_solic.strip() or not descricao_solic.strip():
                     st.error("Preencha título e descrição da solicitação.")
                 else:
                     resultado_solic = criar_solicitacao_servico(
@@ -3336,6 +3443,9 @@ def render_portal_cliente():
                         titulo=titulo_solic,
                         descricao=descricao_solic,
                         prioridade=prioridade_solic,
+                        servico_catalogo_id=servico_catalogo_id if servico_catalogo_id and servico_catalogo_id > 0 else None,
+                        servico_nome=str(servico_final).strip(),
+                        valor_sugerido=float(valor_sugerido or 0),
                         solicitante_email=str(st.session_state.get("usuario_logado_email", ""))
                     )
                     if resultado_solic.get("sucesso"):
