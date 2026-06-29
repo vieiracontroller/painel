@@ -10,6 +10,18 @@ from streamlit_option_menu import option_menu
 
 st.markdown(
     """
+    <meta name="mobile-web-app-capable" content="yes">
+    <meta name="apple-mobile-web-app-capable" content="yes">
+    <meta name="apple-mobile-web-app-status-bar-style" content="black">
+    <meta name="apple-mobile-web-app-title" content="V-CONTROLL Hub">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <link rel="manifest" href="manifest.json">
+    """,
+    unsafe_allow_html=True
+)
+
+st.markdown(
+    """
     <style>
     /* Esconde o menu de compartilhamento, edição e ícones do Streamlit no topo */
     #MainMenu {visibility: hidden !important;}
