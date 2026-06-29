@@ -3812,8 +3812,12 @@ def render_portal_cliente():
                 titulo_solic = st.text_input("Título da solicitação", placeholder="Ex: Serviço personalizado")
                 st.caption("Valor do Serviço Extra: R$ 0.00")
             else:
-                st.caption(f"Valor do Serviço Extra: R$ {valor_sugerido:,.2f}")
                 item_cat = mapa_catalogo_por_nome.get(servico_sel, {})
+                valor_local = float(to_python_scalar(item_cat.get("valor_padrao") or 0) or 0) if item_cat else 0.0
+                if valor_sugerido <= 0 and valor_local > 0:
+                    valor_sugerido = valor_local
+                    st.session_state["valor_servico_extra_portal"] = valor_local
+                st.caption(f"Valor do Serviço Extra: R$ {valor_sugerido:,.2f}")
                 if str(item_cat.get("inclusos") or "").strip():
                     st.caption(f"Inclusos: {str(item_cat.get('inclusos')).strip()}")
                 titulo_solic = st.text_input("Título da solicitação", value=servico_sel)
@@ -3913,27 +3917,33 @@ def render_portal_cliente():
             df_receber_cliente = pd.DataFrame(contas_receber_cliente)
 
             mensalidade_atual = None
-            status_baixa = {"Pago", "Baixado", "Recebido"}
+            status_baixa = {"pago", "baixado", "recebido"}
             if not df_financeiro.empty:
                 filtro_mensalidade = df_financeiro[
-                    (df_financeiro["tipo"].astype(str) == "Mensalidade") &
-                    (df_financeiro["mes"].astype(str) == mes_atual) &
-                    (df_financeiro["ano"].astype(str) == ano_atual)
+                    (df_financeiro["tipo"].astype(str).str.strip().str.lower() == "mensalidade") &
+                    (df_financeiro["mes"].astype(str).str.strip() == mes_atual) &
+                    (df_financeiro["ano"].astype(str).str.strip() == ano_atual)
                 ]
                 if not filtro_mensalidade.empty:
+                    filtro_mensalidade = filtro_mensalidade.copy()
+                    filtro_mensalidade["_pago"] = filtro_mensalidade["status"].astype(str).str.strip().str.lower().isin(status_baixa)
+                    filtro_mensalidade = filtro_mensalidade.sort_values(by="_pago", ascending=False)
                     mensalidade_atual = filtro_mensalidade.iloc[0]
 
             # Se houver mensalidade em contas_a_receber para o mês, ela prevalece quando estiver baixada.
             if not df_receber_cliente.empty:
                 filtro_mensalidade_receber = df_receber_cliente[
-                    (df_receber_cliente["tipo"].astype(str) == "Mensalidade") &
-                    (df_receber_cliente["mes"].astype(str) == mes_atual) &
-                    (df_receber_cliente["ano"].astype(str) == ano_atual)
+                    (df_receber_cliente["tipo"].astype(str).str.strip().str.lower() == "mensalidade") &
+                    (df_receber_cliente["mes"].astype(str).str.strip() == mes_atual) &
+                    (df_receber_cliente["ano"].astype(str).str.strip() == ano_atual)
                 ]
                 if not filtro_mensalidade_receber.empty:
+                    filtro_mensalidade_receber = filtro_mensalidade_receber.copy()
+                    filtro_mensalidade_receber["_pago"] = filtro_mensalidade_receber["status"].astype(str).str.strip().str.lower().isin(status_baixa)
+                    filtro_mensalidade_receber = filtro_mensalidade_receber.sort_values(by="_pago", ascending=False)
                     mensalidade_receber = filtro_mensalidade_receber.iloc[0]
-                    status_receber = str(mensalidade_receber.get("status", "")).strip()
-                    status_fin = str(mensalidade_atual.get("status", "")).strip() if mensalidade_atual is not None else ""
+                    status_receber = str(mensalidade_receber.get("status", "")).strip().lower()
+                    status_fin = str(mensalidade_atual.get("status", "")).strip().lower() if mensalidade_atual is not None else ""
                     if mensalidade_atual is None or (status_receber in status_baixa and status_fin not in status_baixa):
                         mensalidade_atual = mensalidade_receber
 
@@ -3987,7 +3997,7 @@ def render_portal_cliente():
 
             st.markdown("### 💳 Mensalidades e Serviços Pendentes")
             if not df_mes_atual.empty:
-                df_pendentes = df_mes_atual[df_mes_atual["Status"].astype(str) == "Pendente"].copy()
+                df_pendentes = df_mes_atual[df_mes_atual["Status"].astype(str).str.strip().str.lower() == "pendente"].copy()
                 if not df_pendentes.empty:
                     st.dataframe(df_pendentes[["Descrição", "Valor", "Data de Vencimento"]], use_container_width=True)
                 else:
