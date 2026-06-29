@@ -2398,9 +2398,6 @@ def render_portal_cliente():
         tab_fixos_sub, tab_mensais_sub = st.tabs(["📄 Documentos Fixos", "📅 Guias Mensais"])
         
         with tab_fixos_sub:
-            # DEBUG: Validar valores
-            st.write(f"DEBUG: cliente={empresa_atual}, escritorio={escritorio_id}")
-            
             try:
                 if empresa_atual is None:
                     st.warning("Nenhuma empresa selecionada.")
