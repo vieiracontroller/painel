@@ -1117,7 +1117,48 @@ def render_upload_documentos():
 def render_cadastrar_cliente():
     escritorio_id = garantir_escritorio_id()
     st.title("➕ Cadastro de Cliente e Acesso")
-    st.markdown("Registre o cliente e crie o usuário de acesso do cliente em um único fluxo.")
+    st.markdown("Cadastre a nova empresa e vincule-a a um usuário existente ou crie um novo usuário.")
+
+    def _normalizar_lista_empresas_texto(valor_lista):
+        if valor_lista is None:
+            return []
+        if isinstance(valor_lista, list):
+            return [str(item).strip() for item in valor_lista if str(item).strip()]
+        if isinstance(valor_lista, str):
+            texto = valor_lista.strip()
+            if not texto:
+                return []
+            try:
+                parsed = json.loads(texto)
+                if isinstance(parsed, list):
+                    return [str(item).strip() for item in parsed if str(item).strip()]
+                if str(parsed).strip():
+                    return [str(parsed).strip()]
+            except Exception:
+                return [parte.strip() for parte in texto.split(",") if parte.strip()]
+        texto_unico = str(valor_lista).strip()
+        return [texto_unico] if texto_unico else []
+
+    try:
+        usuarios_res = (
+            supabase.table("usuarios_clientes")
+            .select("id,nome,email,representante_id,lista_empresas")
+            .eq("escritorio_id", escritorio_id)
+            .order("email")
+            .execute()
+        )
+        usuarios_cadastrados = usuarios_res.data or []
+    except Exception:
+        usuarios_cadastrados = []
+
+    mapa_usuarios_por_label = {}
+    opcoes_usuario = ["+ Criar novo usuário"]
+    for user in usuarios_cadastrados:
+        nome_user = str(user.get("nome") or "Sem nome").strip()
+        email_user = str(user.get("email") or "sem-email").strip()
+        label_user = f"{nome_user} ({email_user})"
+        mapa_usuarios_por_label[label_user] = user
+        opcoes_usuario.append(label_user)
 
     if "empresa_nome" not in st.session_state:
         st.session_state["empresa_nome"] = ""
@@ -1137,46 +1178,68 @@ def render_cadastrar_cliente():
         st.session_state["usuario_lista_empresas"] = []
 
     with st.form("form_cadastro_cliente", clear_on_submit=True):
-        st.subheader("Dados da Empresa")
-        nome = st.text_input("Razão Social / Nome Fantasia", key="empresa_nome")
-        email_empresa = st.text_input("E-mail institucional", key="empresa_email")
-        telefone = st.text_input("Telefone", key="empresa_telefone")
+        with st.container(border=True):
+            st.subheader("👤 Seleção de Usuário")
+            usuario_vinculo = st.selectbox(
+                "Vincular a um usuário existente?",
+                options=opcoes_usuario,
+                key="vincular_usuario_existente"
+            )
 
-        col1, col2 = st.columns(2)
-        with col1:
-            cnpj = st.text_input("CNPJ", key="empresa_cnpj")
-        with col2:
-            ie = st.text_input("Inscrição Estadual (IE)", key="empresa_ie")
+            criar_novo_usuario = usuario_vinculo == "+ Criar novo usuário"
+            usuario_existente = mapa_usuarios_por_label.get(usuario_vinculo) if not criar_novo_usuario else None
 
-        regime = st.selectbox("Regime Tributário", ["Simples Nacional", "Lucro Presumido", "Lucro Real"], key="empresa_regime")
-        socios = st.text_area("Sócios", key="empresa_socios")
-        tem_folha = st.checkbox("Possui folha de pagamento?", key="empresa_tem_folha")
+            if criar_novo_usuario:
+                usuario_nome = st.text_input("Nome do usuário responsável", key="usuario_nome")
+                usuario_email = st.text_input("E-mail de Login", key="usuario_email")
+                usuario_senha = st.text_input("Senha de Acesso inicial", type="password", key="usuario_senha")
+                representante_id = st.text_input("ID do Representante", key="usuario_representante_id")
+            else:
+                st.success("Usuário existente selecionado. A nova empresa será vinculada a este cadastro.")
+                st.write(f"**Nome:** {str(usuario_existente.get('nome') or '-').strip()}")
+                st.write(f"**E-mail:** {str(usuario_existente.get('email') or '-').strip()}")
+                representante_id = st.text_input(
+                    "ID do Representante",
+                    value=str(usuario_existente.get("representante_id") or "").strip(),
+                    key="usuario_representante_id_existente"
+                )
+                usuario_nome = ""
+                usuario_email = ""
+                usuario_senha = ""
 
-        st.markdown("---")
-        st.subheader("💰 Dados Financeiros")
-        
-        col_hon1, col_hon2 = st.columns(2)
-        with col_hon1:
-            valor_honorario = st.number_input("Valor dos Honorários Mensais (R$):", min_value=0.0, step=100.0, format="%.2f", key="empresa_valor_honorario")
-        with col_hon2:
-            dia_vencimento = st.number_input("Dia de Vencimento (1-31):", min_value=1, max_value=31, value=20, key="empresa_dia_vencimento")
+        with st.container(border=True):
+            st.subheader("🏢 Detalhes da Nova Empresa")
+            nome = st.text_input("Razão Social / Nome Fantasia", key="empresa_nome")
+            email_empresa = st.text_input("E-mail institucional", key="empresa_email")
+            telefone = st.text_input("Telefone", key="empresa_telefone")
 
-        st.markdown("---")
-        st.subheader("Dados de Acesso do Cliente")
-        usuario_nome = st.text_input("Nome do usuário responsável", key="usuario_nome")
-        usuario_email = st.text_input("E-mail de Login", key="usuario_email")
-        usuario_senha = st.text_input("Senha de Acesso inicial", type="password", key="usuario_senha")
-        representante_id = st.text_input("ID do Representante", key="usuario_representante_id")
-        lista_empresas = st.multiselect(
-            "Empresas vinculadas (teste)",
-            options=EMPRESAS_TESTE,
-            key="usuario_lista_empresas"
-        )
+            col1, col2 = st.columns(2)
+            with col1:
+                cnpj = st.text_input("CNPJ", key="empresa_cnpj")
+            with col2:
+                ie = st.text_input("Inscrição Estadual (IE)", key="empresa_ie")
+
+            regime = st.selectbox("Regime Tributário", ["Simples Nacional", "Lucro Presumido", "Lucro Real"], key="empresa_regime")
+            socios = st.text_area("Sócios", key="empresa_socios")
+            tem_folha = st.checkbox("Possui folha de pagamento?", key="empresa_tem_folha")
+
+            st.markdown("### 💰 Dados Financeiros")
+            col_hon1, col_hon2 = st.columns(2)
+            with col_hon1:
+                valor_honorario = st.number_input("Valor dos Honorários Mensais (R$):", min_value=0.0, step=100.0, format="%.2f", key="empresa_valor_honorario")
+            with col_hon2:
+                dia_vencimento = st.number_input("Dia de Vencimento (1-31):", min_value=1, max_value=31, value=20, key="empresa_dia_vencimento")
+
+            lista_empresas = st.multiselect(
+                "Empresas vinculadas (teste)",
+                options=EMPRESAS_TESTE,
+                key="usuario_lista_empresas"
+            )
 
         if st.form_submit_button("Salvar Cadastro"):
             if not nome or not cnpj or not ie:
                 st.error("Por favor, preencha Razão Social, CNPJ e Inscrição Estadual.")
-            elif not usuario_nome or not usuario_email or not usuario_senha:
+            elif criar_novo_usuario and (not usuario_nome or not usuario_email or not usuario_senha):
                 st.error("Por favor, preencha os dados de acesso do cliente.")
             else:
                 try:
@@ -1199,27 +1262,39 @@ def render_cadastrar_cliente():
                         raise ValueError("Falha ao criar o cliente no Supabase.")
 
                     cliente_id = ins_res.data[0]["id"]
-                    supabase.table("usuarios_clientes").insert({
-                        "escritorio_id": escritorio_id,
-                        "cliente_id": cliente_id,
-                        "representante_id": representante_id if representante_id else None,
-                        "lista_empresas": lista_empresas if lista_empresas else [nome],
-                        "email": usuario_email,
-                        "senha": usuario_senha,
-                        "perfil": "cliente",
-                        "grupo_acesso": "Cliente"
-                    }).execute()
 
-                    supabase.table("usuarios_clientes").insert({
-                        "escritorio_id": escritorio_id,
-                        "cliente_id": cliente_id,
-                        "representante_id": representante_id if representante_id else None,
-                        "lista_empresas": lista_empresas if lista_empresas else [nome],
-                        "nome": usuario_nome,
-                        "email": usuario_email,
-                        "senha": usuario_senha,
-                        "perfil": "cliente"
-                    }).execute()
+                    empresas_novas = list(dict.fromkeys((lista_empresas or []) + [nome]))
+
+                    if criar_novo_usuario:
+                        supabase.table("usuarios_clientes").insert({
+                            "escritorio_id": escritorio_id,
+                            "cliente_id": cliente_id,
+                            "representante_id": representante_id if representante_id else None,
+                            "lista_empresas": empresas_novas[:3],
+                            "nome": usuario_nome,
+                            "email": usuario_email,
+                            "senha": usuario_senha,
+                            "perfil": "cliente",
+                            "grupo_acesso": "Cliente"
+                        }).execute()
+                        msg_usuario = "Novo usuário criado e vinculado"
+                    else:
+                        user_id = usuario_existente.get("id")
+                        lista_atual = _normalizar_lista_empresas_texto(usuario_existente.get("lista_empresas"))
+                        lista_atualizada = list(dict.fromkeys(lista_atual + empresas_novas))
+
+                        if len(lista_atualizada) > 3:
+                            st.error("Este representante já atingiu o limite de 3 empresas vinculadas.")
+                            return
+
+                        payload_update = {
+                            "lista_empresas": lista_atualizada
+                        }
+                        if representante_id:
+                            payload_update["representante_id"] = representante_id
+
+                        supabase.table("usuarios_clientes").update(payload_update).eq("id", int(to_python_scalar(user_id))).eq("escritorio_id", escritorio_id).execute()
+                        msg_usuario = "Usuário existente atualizado com nova empresa vinculada"
 
                     for ob in OBRIGACOES_BASE[regime]:
                         supabase.table("tarefas").insert({
@@ -1234,7 +1309,7 @@ def render_cadastrar_cliente():
                             "status": "Pendente"
                         }).execute()
 
-                    st.success("Cliente e Usuário de Acesso criados com sucesso!")
+                    st.success(f"Cliente criado com sucesso! {msg_usuario}.")
                 except Exception as e:
                     st.error(f"Erro ao salvar cadastro: {e}")
 
