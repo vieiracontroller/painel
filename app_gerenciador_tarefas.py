@@ -804,7 +804,8 @@ def carregar_arquivos_escritorio():
         if str(st.session_state.get("perfil") or "").strip().lower() == "cliente":
             empresa_id = obter_empresa_selecionada_segura()
             if empresa_id is not None:
-                query = query.eq("cliente_id", int(empresa_id))
+                # Remover int() para evitar erro de tipo - usar empresa_id diretamente
+                query = query.eq("cliente_id", empresa_id)
         res = query.execute()
         return res.data or []
     except Exception as e:
@@ -1240,23 +1241,30 @@ def render_upload_documentos():
             if not arquivo_upload:
                 st.error("Anexe um arquivo antes de enviar.")
             else:
-                nome_limpo = f"{id_cliente}_{ano_comp}_{mes_comp}_{int(datetime.now().timestamp())}_{arquivo_upload.name}"
-                caminho_storage = f"guias/{nome_limpo}"
-                supabase.storage.from_("documentos-clientes").upload(
-                    path=caminho_storage,
-                    file=arquivo_upload.getvalue(),
-                    file_options={"content-type": arquivo_upload.type}
-                )
-                supabase.table("arquivos_escritorio").insert({
-                    "escritorio_id": escritorio_id,
-                    "cliente_id": id_cliente,
-                    "ano": ano_comp,
-                    "mes": mes_comp,
-                    "nome_arquivo": arquivo_upload.name,
-                    "caminho_storage": caminho_storage,
-                    "data_publicacao": datetime.now().strftime("%d/%m/%Y %H:%M")
-                }).execute()
-                st.success("Documento mensal enviado e salvo na tabela arquivos_escritorio.")
+                try:
+                    nome_limpo = f"{id_cliente}_{ano_comp}_{mes_comp}_{int(datetime.now().timestamp())}_{arquivo_upload.name}"
+                    caminho_storage = f"guias/{nome_limpo}"
+                    supabase.storage.from_("documentos-clientes").upload(
+                        path=caminho_storage,
+                        file=arquivo_upload.getvalue(),
+                        file_options={"content-type": arquivo_upload.type}
+                    )
+                    supabase.table("arquivos_escritorio").insert({
+                        "escritorio_id": escritorio_id,
+                        "cliente_id": id_cliente,
+                        "ano": ano_comp,
+                        "mes": mes_comp,
+                        "nome_arquivo": arquivo_upload.name,
+                        "caminho_storage": caminho_storage,
+                        "data_publicacao": datetime.now().strftime("%d/%m/%Y %H:%M")
+                    }).execute()
+                    # Sincronizar cache após inserção
+                    sincronizar_cache_supabase()
+                    st.success("✅ Documento mensal enviado e salvo na tabela arquivos_escritorio.")
+                    time.sleep(0.5)
+                    st.rerun()
+                except Exception as e:
+                    st.error(f"❌ Erro ao enviar documento mensal: {e}")
 
     else:
         descricao_doc = st.text_input("Nome/Descrição do documento", help="Ex: Contrato Social Consolidado")
@@ -1268,21 +1276,28 @@ def render_upload_documentos():
             elif not descricao_doc:
                 st.error("Informe a descrição do documento fixo.")
             else:
-                nome_limpo = f"{id_cliente}_{int(datetime.now().timestamp())}_{arquivo_upload.name}"
-                caminho_storage = f"documentos/{nome_limpo}"
-                supabase.storage.from_("documentos-fixos").upload(
-                    path=caminho_storage,
-                    file=arquivo_upload.getvalue(),
-                    file_options={"content-type": arquivo_upload.type}
-                )
-                supabase.table("documentos_fixos").insert({
-                    "escritorio_id": escritorio_id,
-                    "cliente_id": id_cliente,
-                    "tipo_documento": descricao_doc,
-                    "nome_arquivo": arquivo_upload.name,
-                    "caminho_storage": caminho_storage
-                }).execute()
-                st.success("Documento fixo enviado e salvo na tabela documentos_fixos.")
+                try:
+                    nome_limpo = f"{id_cliente}_{int(datetime.now().timestamp())}_{arquivo_upload.name}"
+                    caminho_storage = f"documentos/{nome_limpo}"
+                    supabase.storage.from_("documentos-fixos").upload(
+                        path=caminho_storage,
+                        file=arquivo_upload.getvalue(),
+                        file_options={"content-type": arquivo_upload.type}
+                    )
+                    supabase.table("documentos_fixos").insert({
+                        "escritorio_id": escritorio_id,
+                        "cliente_id": id_cliente,
+                        "tipo_documento": descricao_doc,
+                        "nome_arquivo": arquivo_upload.name,
+                        "caminho_storage": caminho_storage
+                    }).execute()
+                    # Sincronizar cache após inserção
+                    sincronizar_cache_supabase()
+                    st.success("✅ Documento fixo enviado e salvo na tabela documentos_fixos.")
+                    time.sleep(0.5)
+                    st.rerun()
+                except Exception as e:
+                    st.error(f"❌ Erro ao enviar documento fixo: {e}")
 
 # ============================================================================
 # MÓDULO: VISUALIZAÇÕES - CADASTRO
