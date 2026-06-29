@@ -1009,9 +1009,10 @@ def gerar_honorarios_mensais_automatico():
     2. Se não existir, insere automaticamente um registro na tabela `financeiro_mensal` 
        com o valor do honorário definido no cadastro do cliente.
     3. Garante segurança evitando duplicidade (UPSERT se possível).
+    4. Inclui `escritorio_id` em todos os registros para garantir isolamento de dados.
     
     Returns:
-        dict: {"sucesso": bool, "mensagem": str, "inseridas": int}
+        dict: {"sucesso": bool, "mensagem": str, "inseridas": int, "clientes_processados": int}
     """
     try:
         escritorio_id = garantir_escritorio_id()
@@ -1023,13 +1024,14 @@ def gerar_honorarios_mensais_automatico():
         clientes_ativos = supabase.table("clientes").select("*").eq("escritorio_id", escritorio_id).eq("status_cadastro", "Ativo").execute().data or []
         
         if not clientes_ativos:
-            return {"sucesso": False, "mensagem": "Nenhum cliente ativo encontrado.", "inseridas": 0}
+            return {"sucesso": False, "mensagem": "Nenhum cliente ativo encontrado.", "inseridas": 0, "clientes_processados": 0}
         
         # Carregar lançamentos de "Mensalidade" já existentes para este mês/ano
         mensalidades_existentes = supabase.table("financeiro_mensal").select("cliente_id").eq("escritorio_id", escritorio_id).eq("tipo", "Mensalidade").eq("mes", mes_atual).eq("ano", ano_atual).execute().data or []
         clientes_com_mensalidade = {int(to_python_scalar(m.get("cliente_id"))) for m in mensalidades_existentes if m.get("cliente_id") is not None}
         
         inseridas = 0
+        clientes_com_honorario = 0
         novos_lancamentos = []
         
         # Para cada cliente ativo
@@ -1039,13 +1041,17 @@ def gerar_honorarios_mensais_automatico():
                 continue
             
             cliente_id_int = int(to_python_scalar(cliente_id))
+            valor_honorario = float(to_python_scalar(cliente.get("valor_honorario", 0) or 0))
+            
+            # Contar clientes com honorário definido
+            if valor_honorario > 0:
+                clientes_com_honorario += 1
             
             # Verificar se já existe mensalidade para este cliente neste mês
             if cliente_id_int in clientes_com_mensalidade:
                 continue
             
             # Obter valor do honorário
-            valor_honorario = float(to_python_scalar(cliente.get("valor_honorario", 0) or 0))
             if valor_honorario <= 0:
                 continue
             
@@ -1053,7 +1059,7 @@ def gerar_honorarios_mensais_automatico():
             dia_vencimento = int(float(to_python_scalar(cliente.get("dia_vencimento", 10) or 10)))
             data_venc = gerar_data_vencimento(ano_atual, mes_atual, dia_vencimento)
             
-            # Preparar novo lançamento
+            # Preparar novo lançamento com escritorio_id
             novos_lancamentos.append({
                 "escritorio_id": escritorio_id,
                 "cliente_id": cliente_id_int,
@@ -1074,10 +1080,11 @@ def gerar_honorarios_mensais_automatico():
             # Sincronizar cache após inserção
             sincronizar_cache_supabase()
         
-        return {"sucesso": True, "mensagem": f"{inseridas} honorários mensais gerados com sucesso.", "inseridas": inseridas}
+        mensagem = f"{inseridas} mensalidade(s) gerada(s). {clientes_com_honorario} cliente(s) com honorário configurado."
+        return {"sucesso": True, "mensagem": mensagem, "inseridas": inseridas, "clientes_processados": clientes_com_honorario}
     
     except Exception as e:
-        return {"sucesso": False, "mensagem": f"Erro ao gerar honorários mensais: {e}", "inseridas": 0}
+        return {"sucesso": False, "mensagem": f"Erro ao gerar honorários mensais: {e}", "inseridas": 0, "clientes_processados": 0}
 
 # ============================================================================
 # MÓDULO: VISUALIZAÇÕES - DASHBOARD
@@ -1309,6 +1316,53 @@ def render_dashboard():
                 st.info("Selecione uma ou mais tarefas para concluir em massa.")
         else:
             st.info("Não há obrigações pendentes para concluir no momento.")
+        
+        # ===== REABERTURA DE OBRIGAÇÕES CONCLUÍDAS =====
+        st.markdown("---")
+        tarefas_concluidas = df_tarefas[df_tarefas["status"] == "Concluído"]
+        if not tarefas_concluidas.empty:
+            tarefas_concluidas = tarefas_concluidas.merge(
+                df_clientes[["id", "nome"]],
+                left_on="cliente_id",
+                right_on="id",
+                how="left",
+                suffixes=("", "_cliente")
+            )
+            
+            st.subheader("🔄 Reabertura de Obrigações")
+            st.markdown("#### 📋 Tarefas concluídas (clique para reabrir por engano):")
+            cols_reabertura = st.columns(3)
+            tarefas_para_reabrir = []
+            
+            for idx, (_, row) in enumerate(tarefas_concluidas.iterrows()):
+                cliente = row.get('nome', '-')
+                obrigacao = row.get('obrigacao', '-')
+                mes = row.get('mes', '-')
+                t_id = row.get('id', None)
+                
+                if t_id is not None:
+                    col_idx = idx % 3
+                    with cols_reabertura[col_idx]:
+                        label_task = f"🔄 {cliente} - {obrigacao} ({mes})"
+                        if st.checkbox(label_task, key=f"tarefa_reabrir_{t_id}"):
+                            tarefas_para_reabrir.append(int(to_python_scalar(t_id)))
+            
+            # Botão de reabertura em massa
+            if tarefas_para_reabrir:
+                if st.button("🔄 Reabrir Selecionadas", key="btn_reabrir_mass"):
+                    try:
+                        for tarefa_id in tarefas_para_reabrir:
+                            supabase.table("tarefas").update({"status": "Pendente"}).eq("id", tarefa_id).eq("escritorio_id", escritorio_id).execute()
+                        sincronizar_cache_supabase()
+                        st.success(f"🔄 {len(tarefas_para_reabrir)} tarefa(s) reabert(as) com sucesso!")
+                        time.sleep(0.5)
+                        st.rerun()
+                    except Exception as e:
+                        st.error(f"❌ Erro ao reabrir tarefas: {e}")
+            else:
+                st.info("Selecione uma ou mais tarefas concluídas para reabrir.")
+        else:
+            st.info("Não há tarefas concluídas para reabrir no momento.")
     else:
         st.info("Cadastre um cliente e suas obrigações para começar a preencher o painel.")
 
