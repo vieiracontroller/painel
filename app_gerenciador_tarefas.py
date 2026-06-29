@@ -1375,6 +1375,7 @@ def render_dashboard():
                 how="left",
                 suffixes=("", "_cliente")
             )
+            tarefas_pendentes = tarefas_pendentes.sort_values(by=[col for col in ["ano", "mes", "id"] if col in tarefas_pendentes.columns]).reset_index(drop=True)
             
             st.subheader("⚙️ Conclusão de Tarefas")
             
@@ -1393,7 +1394,8 @@ def render_dashboard():
                     col_idx = idx % 3
                     with cols_checkbox[col_idx]:
                         label_task = f"{cliente} - {obrigacao} ({mes})"
-                        if st.checkbox(label_task, key=f"tarefa_check_{t_id}"):
+                        key_concluir = f"dash_concluir_{t_id}_{idx}_{row.get('mes', '-')}_{row.get('ano', '-') }"
+                        if st.checkbox(label_task, key=key_concluir):
                             tarefas_selecionadas.append(int(to_python_scalar(t_id)))
             
             # Botão de conclusão em massa
@@ -1424,6 +1426,7 @@ def render_dashboard():
                 how="left",
                 suffixes=("", "_cliente")
             )
+            tarefas_concluidas = tarefas_concluidas.sort_values(by=[col for col in ["ano", "mes", "id"] if col in tarefas_concluidas.columns]).reset_index(drop=True)
             
             st.subheader("🔄 Reabertura de Obrigações")
             st.markdown("#### 📋 Tarefas concluídas (clique para reabrir por engano):")
@@ -1440,7 +1443,8 @@ def render_dashboard():
                     col_idx = idx % 3
                     with cols_reabertura[col_idx]:
                         label_task = f"🔄 {cliente} - {obrigacao} ({mes})"
-                        if st.checkbox(label_task, key=f"tarefa_reabrir_{t_id}"):
+                        key_reabrir = f"dash_reabrir_{t_id}_{idx}_{row.get('mes', '-')}_{row.get('ano', '-') }"
+                        if st.checkbox(label_task, key=key_reabrir):
                             tarefas_para_reabrir.append(int(to_python_scalar(t_id)))
             
             # Botão de reabertura em massa
@@ -2135,22 +2139,35 @@ def render_financeiro():
             mes_ref = mes_selecionado
             ano_ref = ano_selecionado
             
-            # Carregar dados financeiros com validação
+            # Carregar dados financeiros do escritório inteiro e filtrar em memória
+            # para evitar divergência por tipo/formato de ano no banco (str vs int).
             try:
-                recebimentos = supabase.table("financeiro_mensal").select("*").eq("escritorio_id", escritorio_id).eq("mes", mes_ref).eq("ano", ano_ref).execute().data or []
-                if not recebimentos:
-                    st.info(f"ℹ️ Nenhum recebimento encontrado para {mes_ref}/{ano_ref}")
+                recebimentos_all = supabase.table("financeiro_mensal").select("*").eq("escritorio_id", escritorio_id).execute().data or []
             except Exception as e:
                 st.error(f"❌ Erro ao carregar recebimentos: {e}")
-                recebimentos = []
-            
+                recebimentos_all = []
+
             try:
-                despesas = supabase.table("contas_a_pagar").select("*").eq("escritorio_id", escritorio_id).eq("mes", mes_ref).eq("ano", ano_ref).execute().data or []
-                if not despesas:
-                    st.info(f"ℹ️ Nenhuma despesa encontrada para {mes_ref}/{ano_ref}")
+                despesas_all = supabase.table("contas_a_pagar").select("*").eq("escritorio_id", escritorio_id).execute().data or []
             except Exception as e:
                 st.error(f"❌ Erro ao carregar despesas: {e}")
-                despesas = []
+                despesas_all = []
+
+            recebimentos = [
+                r for r in recebimentos_all
+                if str(r.get("mes", "")).strip() == str(mes_ref)
+                and str(r.get("ano", "")).strip() == str(ano_ref)
+            ]
+            despesas = [
+                d for d in despesas_all
+                if str(d.get("mes", "")).strip() == str(mes_ref)
+                and str(d.get("ano", "")).strip() == str(ano_ref)
+            ]
+
+            if not recebimentos:
+                st.info(f"ℹ️ Nenhum recebimento encontrado para {mes_ref}/{ano_ref}")
+            if not despesas:
+                st.info(f"ℹ️ Nenhuma despesa encontrada para {mes_ref}/{ano_ref}")
             
             # ===== FILTRO POR CLIENTE NO DASHBOARD FINANCEIRO =====
             clientes_list = carregar_clientes()
@@ -2166,13 +2183,17 @@ def render_financeiro():
                     despesas = [d for d in despesas if d.get("cliente_id") == cliente_id_filtro]
             
             # Processar dados
-            df_receber = pd.DataFrame(recebimentos) if recebimentos else pd.DataFrame()
+            df_contas_a_receber = pd.DataFrame(recebimentos) if recebimentos else pd.DataFrame()
+            df_receber = df_contas_a_receber.copy()
             df_pagar = pd.DataFrame(despesas) if despesas else pd.DataFrame()
             
             if not df_receber.empty:
                 df_receber["valor"] = pd.to_numeric(df_receber["valor"], errors="coerce").fillna(0)
             if not df_pagar.empty:
                 df_pagar["valor"] = pd.to_numeric(df_pagar["valor"], errors="coerce").fillna(0)
+
+            # DEBUG temporário solicitado: visualizar o dataframe antes da renderização das métricas.
+            st.write("DEBUG df_contas_a_receber (admin)", df_contas_a_receber)
             
             # Cálculos
             total_recebido = float(df_receber[df_receber["status"] == "Pago"]["valor"].sum()) if not df_receber.empty else 0.0
@@ -2253,10 +2274,18 @@ def render_financeiro():
 
                 # ===== DEBUG: Validar mês/ano e carregar recebimentos =====
                 try:
-                    recebimentos = supabase.table("financeiro_mensal").select("*").eq("escritorio_id", escritorio_id).eq("mes", mes_ref).eq("ano", ano_ref).execute().data or []
+                    recebimentos_all = supabase.table("financeiro_mensal").select("*").eq("escritorio_id", escritorio_id).execute().data or []
+                    recebimentos = [
+                        r for r in recebimentos_all
+                        if str(r.get("mes", "")).strip() == str(mes_ref)
+                        and str(r.get("ano", "")).strip() == str(ano_ref)
+                    ]
                     if not recebimentos:
                         # Se não há dados, tenta carregar sem filtro de ano para debug
-                        recebimentos_debug = supabase.table("financeiro_mensal").select("*").eq("escritorio_id", escritorio_id).eq("mes", mes_ref).execute().data or []
+                        recebimentos_debug = [
+                            r for r in recebimentos_all
+                            if str(r.get("mes", "")).strip() == str(mes_ref)
+                        ]
                         if recebimentos_debug:
                             st.warning(f"⚠️ DEBUG: Encontrados {len(recebimentos_debug)} registros para {mes_ref}, mas nenhum para {ano_ref}. Verifique o campo 'ano' na tabela.")
                 except Exception as e:
@@ -2264,7 +2293,12 @@ def render_financeiro():
                     recebimentos = []
 
                 try:
-                    despesas = supabase.table("contas_a_pagar").select("*").eq("escritorio_id", escritorio_id).eq("mes", mes_ref).eq("ano", ano_ref).execute().data or []
+                    despesas_all = supabase.table("contas_a_pagar").select("*").eq("escritorio_id", escritorio_id).execute().data or []
+                    despesas = [
+                        d for d in despesas_all
+                        if str(d.get("mes", "")).strip() == str(mes_ref)
+                        and str(d.get("ano", "")).strip() == str(ano_ref)
+                    ]
                 except Exception as e:
                     st.warning(f"⚠️ Erro ao carregar Contas a Pagar: {e}")
                     despesas = []
@@ -2376,7 +2410,7 @@ def render_financeiro():
                         st.info("Nenhum recebimento pago para reabrir.")
 
                     st.markdown("---")
-                    st.markdown("### �📝 Lançar Serviço Extra")
+                    st.markdown("### 📝 Lançar Serviço Extra")
                     with st.expander("➕ Criar Serviço Extra / Cobrança Avulsa", expanded=False):
                         with st.form("form_servico_extra"):
                             if not clientes_ativos:
