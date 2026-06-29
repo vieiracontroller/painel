@@ -1250,8 +1250,8 @@ def render_dashboard():
     st.markdown("### Últimas tarefas cadastradas")
     if not df_tarefas.empty and not df_clientes.empty:
         df_exibicao = df_tarefas.merge(df_clientes[["id", "nome"]], left_on="cliente_id", right_on="id", how="left")
-        df_exibicao = df_exibicao[["nome", "obrigacao", "periodicidade", "mes", "ano", "vencimento", "status"]]
-        df_exibicao.columns = ["Cliente", "Obrigação", "Periodicidade", "Mês", "Ano", "Prazo", "Status"]
+        df_exibicao = df_exibicao[["id", "nome", "obrigacao", "periodicidade", "mes", "ano", "vencimento", "status"]]
+        df_exibicao.columns = ["ID", "Cliente", "Obrigação", "Periodicidade", "Mês", "Ano", "Prazo", "Status"]
         st.dataframe(df_exibicao.sort_values(by=["Ano", "Mês"], ascending=False).head(10), use_container_width=True)
 
         tarefas_pendentes = df_tarefas[df_tarefas["status"] == "Pendente"]
@@ -1263,29 +1263,41 @@ def render_dashboard():
                 how="left",
                 suffixes=("", "_cliente")
             )
-            tarefa_options = {}
-            if not tarefas_pendentes.empty:
-                for _, row in tarefas_pendentes.iterrows():
-                    cliente = row.get('Cliente', row.get('nome', ''))
-                    obrigacao = row.get('Obrigação', row.get('obrigacao', ''))
-                    mes = row.get('Mês', row.get('mes', ''))
-                    t_id = row.get('id', row.get('ID', None))
-                    if t_id is not None:
-                        label = f"{cliente} - {obrigacao} ({mes})"
-                        tarefa_options[label] = t_id
-
-            st.subheader("⚙️ Gerenciar e Concluir Obrigações")
-            if tarefa_options:
-                selected_tarefa = st.selectbox("Selecione a obrigação pendente:", list(tarefa_options.keys()))
-                if st.button("✅ Marcar como Concluída"):
-                    tarefa_id = tarefa_options[selected_tarefa]
-                    supabase.table("tarefas").update({"status": "Concluído"}).eq("id", int(tarefa_id)).eq("escritorio_id", escritorio_id).execute()
-                    # Sincronizar cache após atualização
-                    sincronizar_cache_supabase()
-                    st.success("Obrigação concluída com sucesso!")
-                    st.rerun()
+            
+            st.subheader("⚙️ Conclusão de Tarefas")
+            
+            # ===== CONCLUSÃO EM MASSA COM CHECKBOXES =====
+            st.markdown("#### 📋 Selecione tarefas para concluir em massa:")
+            cols_checkbox = st.columns(3)
+            tarefas_selecionadas = []
+            
+            for idx, (_, row) in enumerate(tarefas_pendentes.iterrows()):
+                cliente = row.get('nome', '-')
+                obrigacao = row.get('obrigacao', '-')
+                mes = row.get('mes', '-')
+                t_id = row.get('id', None)
+                
+                if t_id is not None:
+                    col_idx = idx % 3
+                    with cols_checkbox[col_idx]:
+                        label_task = f"{cliente} - {obrigacao} ({mes})"
+                        if st.checkbox(label_task, key=f"tarefa_check_{t_id}"):
+                            tarefas_selecionadas.append(int(to_python_scalar(t_id)))
+            
+            # Botão de conclusão em massa
+            if tarefas_selecionadas:
+                if st.button("✅ Concluir Selecionadas", key="btn_concluir_mass"):
+                    try:
+                        for tarefa_id in tarefas_selecionadas:
+                            supabase.table("tarefas").update({"status": "Concluído"}).eq("id", tarefa_id).eq("escritorio_id", escritorio_id).execute()
+                        sincronizar_cache_supabase()
+                        st.success(f"✅ {len(tarefas_selecionadas)} tarefa(s) concluída(s) com sucesso!")
+                        time.sleep(0.5)
+                        st.rerun()
+                    except Exception as e:
+                        st.error(f"❌ Erro ao concluir tarefas: {e}")
             else:
-                st.info("Não há obrigações pendentes encontradas com dados de ID válidos.")
+                st.info("Selecione uma ou mais tarefas para concluir em massa.")
         else:
             st.info("Não há obrigações pendentes para concluir no momento.")
     else:
@@ -1919,7 +1931,85 @@ def render_financeiro():
         st.markdown("---")
         st.subheader("📊 Gestão Financeira")
 
-        with st.expander("📊 Gestão Financeira (Relatórios e Faturamento)", expanded=False):
+        # ===== DASHBOARD FINANCEIRO =====
+        try:
+            resultado_hon = gerar_honorarios_mensais_automatico()
+            if resultado_hon.get("inseridas", 0) > 0:
+                st.info(f"✅ {resultado_hon.get('mensagem')}")
+            
+            # Carregar dados financeiros
+            hoje = datetime.now()
+            mes_ref = LISTA_MESES[hoje.month - 1]
+            ano_ref = str(hoje.year)
+            
+            try:
+                recebimentos = supabase.table("financeiro_mensal").select("*").eq("escritorio_id", escritorio_id).eq("mes", mes_ref).eq("ano", ano_ref).execute().data or []
+            except Exception:
+                recebimentos = []
+            
+            try:
+                despesas = supabase.table("contas_a_pagar").select("*").eq("escritorio_id", escritorio_id).eq("mes", mes_ref).eq("ano", ano_ref).execute().data or []
+            except Exception:
+                despesas = []
+            
+            # Processar dados
+            df_receber = pd.DataFrame(recebimentos) if recebimentos else pd.DataFrame()
+            df_pagar = pd.DataFrame(despesas) if despesas else pd.DataFrame()
+            
+            if not df_receber.empty:
+                df_receber["valor"] = pd.to_numeric(df_receber["valor"], errors="coerce").fillna(0)
+            if not df_pagar.empty:
+                df_pagar["valor"] = pd.to_numeric(df_pagar["valor"], errors="coerce").fillna(0)
+            
+            # Cálculos
+            total_recebido = float(df_receber[df_receber["status"] == "Pago"]["valor"].sum()) if not df_receber.empty else 0.0
+            total_pendente_receber = float(df_receber[df_receber["status"] == "Pendente"]["valor"].sum()) if not df_receber.empty else 0.0
+            total_a_pagar = float(df_pagar["valor"].sum()) if not df_pagar.empty else 0.0
+            
+            # Exibição de métricas
+            st.markdown(f"#### 📈 Resumo Financeiro - {mes_ref}/{ano_ref}")
+            col1, col2, col3, col4 = st.columns(4)
+            
+            with col1:
+                st.metric("💰 Contas Recebidas", f"R$ {total_recebido:,.2f}")
+            with col2:
+                st.metric("⏳ Contas a Receber", f"R$ {total_pendente_receber:,.2f}")
+            with col3:
+                st.metric("💸 Contas a Pagar", f"R$ {total_a_pagar:,.2f}")
+            with col4:
+                saldo_liq = total_recebido - total_a_pagar
+                cor_saldo = "🟢" if saldo_liq >= 0 else "🔴"
+                st.metric(f"{cor_saldo} Saldo Líquido", f"R$ {saldo_liq:,.2f}")
+            
+            # Gráfico de Fluxo de Caixa
+            st.markdown("#### 📊 Fluxo de Caixa Mensal")
+            
+            fluxo_data = {
+                "Categoria": ["Recebimentos\nConfirmados", "Recebimentos\nPendentes", "Despesas"],
+                "Valor": [total_recebido, total_pendente_receber, total_a_pagar]
+            }
+            df_fluxo = pd.DataFrame(fluxo_data)
+            
+            fig_fluxo = px.bar(
+                df_fluxo,
+                x="Categoria",
+                y="Valor",
+                title="Projeção de Fluxo de Caixa",
+                color="Categoria",
+                color_discrete_sequence=[CORES_VCONTROLL["sucesso"], CORES_VCONTROLL["aviso"], CORES_VCONTROLL["erro"]],
+                labels={"Valor": "Valor (R$)"}
+            )
+            fig_fluxo.update_layout(
+                showlegend=False,
+                hovermode="x unified",
+                title_font_color=CORES_VCONTROLL["azul_escuro"]
+            )
+            st.plotly_chart(fig_fluxo, use_container_width=True)
+            
+        except Exception as e:
+            st.warning(f"Não foi possível carregar o resumo financeiro: {e}")
+
+        with st.expander("📊 Detalhes: Contas a Receber e Pagar", expanded=False):
             try:
                 perfil_usuario = obter_perfil_usuario(st.session_state.get("usuario_logado_email", ""))
                 perfil_sessao = str(st.session_state.get("perfil", "")).strip().lower()
