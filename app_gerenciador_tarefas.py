@@ -1121,8 +1121,7 @@ def sincronizar_honorario_em_contas_a_receber(
             "valor": valor,
             "data_vencimento": data_venc,
             "status": "Pendente",
-            "data_pagamento": None,
-            "data_lancamento": datetime.now().strftime("%Y-%m-%d")
+            "data_pagamento": None
         }).execute()
 
         return {"sucesso": True, "inseriu": True, "mensagem": "Mensalidade lançada em contas_a_receber."}
@@ -1458,15 +1457,14 @@ def processar_solicitacao_servico(
                     "valor": valor,
                     "data_vencimento": str(data_vencimento),
                     "status": "Pendente",
-                    "data_pagamento": None,
-                    "data_lancamento": datetime.now().strftime("%Y-%m-%d")
+                    "data_pagamento": None
                 }).execute()
             except Exception as e_contas:
                 return {
                     "sucesso": False,
                     "mensagem": formatar_erro_supabase_tabela_coluna(
                         "contas_a_receber",
-                        ["escritorio_id", "cliente_id", "tipo", "descricao", "valor", "data_vencimento", "status", "data_pagamento", "data_lancamento"],
+                        ["escritorio_id", "cliente_id", "tipo", "descricao", "valor", "data_vencimento", "status", "data_pagamento"],
                         e_contas,
                     ),
                 }
@@ -3057,14 +3055,13 @@ def render_financeiro():
                                                     "valor": float(to_python_scalar(row.get("valor") or 0) or 0),
                                                     "data_vencimento": str(row.get("data_vencimento") or hoje_lanc.strftime("%Y-%m-%d")),
                                                     "status": "Recebido",
-                                                    "data_pagamento": data_atual,
-                                                    "data_lancamento": hoje_lanc.strftime("%Y-%m-%d")
+                                                    "data_pagamento": data_atual
                                                 }).execute()
                                             st.success("Recebimento baixado com sucesso.")
                                             st.rerun()
                                         except Exception as e:
                                             msg_erro = str(e)
-                                            st.error(formatar_erro_supabase_tabela_coluna("contas_a_receber", ["id", "escritorio_id", "status", "data_pagamento", "cliente_id", "tipo", "descricao", "valor", "data_vencimento", "data_lancamento"], e))
+                                            st.error(formatar_erro_supabase_tabela_coluna("contas_a_receber", ["id", "escritorio_id", "status", "data_pagamento", "cliente_id", "tipo", "descricao", "valor", "data_vencimento"], e))
                                             if "permission" in msg_erro.lower() or "rls" in msg_erro.lower() or "not allowed" in msg_erro.lower():
                                                 st.error("A política RLS da tabela financeira precisa permitir UPDATE para o role authenticated.")
                     else:
