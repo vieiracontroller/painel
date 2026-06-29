@@ -2041,6 +2041,19 @@ def render_financeiro():
                 st.error(f"❌ Erro ao carregar despesas: {e}")
                 despesas = []
             
+            # ===== FILTRO POR CLIENTE NO DASHBOARD FINANCEIRO =====
+            clientes_list = carregar_clientes()
+            clientes_filtro = ["Todos os Clientes"] + [c.get("nome", "-") for c in clientes_list if c.get("status_cadastro") == "Ativo"]
+            cliente_selecionado = st.selectbox("Filtrar por Cliente:", clientes_filtro, key="filtro_cliente_financeiro")
+            
+            # Se um cliente específico for selecionado, filtrar os dados
+            if cliente_selecionado != "Todos os Clientes":
+                cliente_obj = next((c for c in clientes_list if c.get("nome") == cliente_selecionado), None)
+                if cliente_obj:
+                    cliente_id_filtro = cliente_obj.get("id")
+                    recebimentos = [r for r in recebimentos if r.get("cliente_id") == cliente_id_filtro]
+                    despesas = [d for d in despesas if d.get("cliente_id") == cliente_id_filtro]
+            
             # Processar dados
             df_receber = pd.DataFrame(recebimentos) if recebimentos else pd.DataFrame()
             df_pagar = pd.DataFrame(despesas) if despesas else pd.DataFrame()
@@ -2210,7 +2223,35 @@ def render_financeiro():
                         st.info("Nenhum lançamento encontrado em contas a receber para o mês atual.")
 
                     st.markdown("---")
-                    st.markdown("### 📝 Lançar Serviço Extra")
+                    st.markdown("### � Reabertura de Recebimentos")
+                    recebimentos_pagos = df_receber[df_receber["status"] == "Pago"].copy()
+                    if not recebimentos_pagos.empty:
+                        st.markdown("Clique no botão para reabrir um recebimento baixado indevidamente:")
+                        for idx, row in recebimentos_pagos.iterrows():
+                            row_id = int(float(to_python_scalar(row.get("id")))) if pd.notna(row.get("id")) else None
+                            if row_id is None:
+                                continue
+                            col_info, col_btn = st.columns([5, 1])
+                            with col_info:
+                                st.write(
+                                    f"🔄 {str(row.get('descricao', '-'))} | R$ {float(to_python_scalar(row.get('valor', 0) or 0)):,.2f} | Pago em: {str(row.get('data_pagamento', '-'))}"
+                                )
+                            with col_btn:
+                                if st.button("Reabrir", key=f"btn_reabrir_recebimento_{row_id}_{idx}"):
+                                    try:
+                                        supabase.table("financeiro_mensal").update({
+                                            "status": "Pendente",
+                                            "data_pagamento": None
+                                        }).eq("id", int(row_id)).eq("escritorio_id", escritorio_id).execute()
+                                        st.success("Recebimento reabert com sucesso.")
+                                        st.rerun()
+                                    except Exception:
+                                        st.info("Não foi possível reabrir o recebimento neste momento.")
+                    else:
+                        st.info("Nenhum recebimento pago para reabrir.")
+
+                    st.markdown("---")
+                    st.markdown("### �📝 Lançar Serviço Extra")
                     with st.expander("➕ Criar Serviço Extra / Cobrança Avulsa", expanded=False):
                         with st.form("form_servico_extra"):
                             if not clientes_ativos:
@@ -2322,6 +2363,34 @@ def render_financeiro():
                                             st.info("Não foi possível baixar a despesa neste momento.")
                     else:
                         st.info("Nenhuma despesa registrada em contas a pagar para o mês atual.")
+
+                    st.markdown("---")
+                    st.markdown("### 🔄 Reabertura de Despesas")
+                    despesas_pagas = df_pagar[df_pagar["status"] == "Pago"].copy()
+                    if not despesas_pagas.empty:
+                        st.markdown("Clique no botão para reabrir uma despesa paga indevidamente:")
+                        for idx, row in despesas_pagas.iterrows():
+                            desp_id = int(float(to_python_scalar(row.get("id")))) if pd.notna(row.get("id")) else None
+                            if desp_id is None:
+                                continue
+                            col_info, col_btn = st.columns([5, 1])
+                            with col_info:
+                                st.write(
+                                    f"🔄 {str(row.get('descricao', '-'))} | {str(row.get('fornecedor', '-'))} | R$ {float(to_python_scalar(row.get('valor', 0) or 0)):,.2f}"
+                                )
+                            with col_btn:
+                                if st.button("Reabrir Despesa", key=f"btn_reabrir_despesa_{desp_id}_{idx}"):
+                                    try:
+                                        supabase.table("contas_a_pagar").update({
+                                            "status": "Pendente",
+                                            "data_pagamento": None
+                                        }).eq("id", int(desp_id)).eq("escritorio_id", escritorio_id).execute()
+                                        st.success("Despesa reabert com sucesso.")
+                                        st.rerun()
+                                    except Exception:
+                                        st.info("Não foi possível reabrir a despesa neste momento.")
+                    else:
+                        st.info("Nenhuma despesa paga para reabrir.")
 
                 st.markdown("---")
                 st.markdown("### 📌 Resumo Consolidado")
@@ -3048,6 +3117,31 @@ def render_gestao_saas():
             if coluna not in df_escritorios.columns:
                 df_escritorios[coluna] = "-"
         st.dataframe(df_escritorios[colunas_escritorios], use_container_width=True, hide_index=True)
+        
+        # ===== GESTÃO DE STATUS DE ESCRITÓRIOS =====
+        st.markdown("---")
+        st.markdown("#### ⚙️ Gerenciar Status de Escritórios")
+        col_sel_esc, col_status_esc = st.columns(2)
+        
+        with col_sel_esc:
+            escritorios_labels = [f"{e.get('nome', '-')} (ID: {e.get('id')})" for e in escritorios_parceiros]
+            escritorio_selecionado_label = st.selectbox("Selecione o escritório:", escritorios_labels, key="sel_status_escritorio")
+            escritorio_selecionado_id = int(escritorio_selecionado_label.split("ID: ")[1].rstrip(")"))
+        
+        with col_status_esc:
+            novo_status_esc = st.selectbox("Novo Status:", ["Ativo", "Inativo"], key="novo_status_escritorio")
+        
+        if st.button("🔄 Atualizar Status do Escritório", key="btn_atualizar_status_escritorio"):
+            try:
+                supabase.table("escritorios").update({
+                    "status": novo_status_esc
+                }).eq("id", int(escritorio_selecionado_id)).execute()
+                sincronizar_cache_supabase()
+                status_icon = "✅ Ativado" if novo_status_esc == "Ativo" else "🔴 Inativado"
+                st.success(f"Escritório {status_icon} com sucesso!")
+                st.rerun()
+            except Exception as e:
+                st.error(f"Erro ao atualizar status: {str(e)}")
     else:
         st.info("Nenhum escritório cadastrado até o momento.")
 
