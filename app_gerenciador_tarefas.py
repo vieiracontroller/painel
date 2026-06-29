@@ -3819,15 +3819,19 @@ def render_portal_cliente():
         st.markdown("Abra chamados para serviços extras. O escritório irá analisar e processar sua demanda.")
 
         catalogo_bruto = carregar_catalogo_servicos(int(escritorio_id))
-        catalogo_cliente = [_normalizar_item_catalogo(item) for item in catalogo_bruto]
-        opcoes_catalogo = [str(item.get("servico", "-")).strip() for item in catalogo_cliente if str(item.get("servico", "")).strip()]
+        opcoes_catalogo = [
+            str(item.get("nome_servico") or "").strip()
+            for item in catalogo_bruto
+            if str(item.get("nome_servico") or "").strip()
+        ]
+        if not opcoes_catalogo:
+            # Fallback de compatibilidade para schemas anteriores.
+            opcoes_catalogo = [
+                str(item.get("servico") or "").strip()
+                for item in catalogo_bruto
+                if str(item.get("servico") or "").strip()
+            ]
         opcoes_catalogo = opcoes_catalogo + ["Outro"]
-
-        mapa_catalogo_por_nome = {
-            str(item.get("servico", "")).strip(): item
-            for item in catalogo_cliente
-            if str(item.get("servico", "")).strip()
-        }
 
         with st.form("form_solicitar_servico_cliente"):
             servico_sel = st.selectbox("Serviço do catálogo", opcoes_catalogo, key="sel_servico_catalogo_cliente")
@@ -3838,9 +3842,34 @@ def render_portal_cliente():
                 servico_manual = st.text_input("Descreva o serviço manualmente", placeholder="Ex: Retificação específica")
                 titulo_solic = st.text_input("Título da solicitação", placeholder="Ex: Serviço personalizado")
             else:
-                item_cat = mapa_catalogo_por_nome.get(servico_sel, {})
-                valor_sugerido = float(to_python_scalar(item_cat.get("valor_sugerido") or 0) or 0) if item_cat else 0.0
-                st.caption(f"Valor sugerido: R$ {valor_sugerido:,.2f}")
+                item_cat = {}
+                try:
+                    item_cat = (
+                        supabase.table("catalogo_servicos")
+                        .select("nome_servico,valor_padrao,inclusos")
+                        .eq("escritorio_id", int(escritorio_id))
+                        .eq("nome_servico", str(servico_sel).strip())
+                        .limit(1)
+                        .execute()
+                        .data
+                        or []
+                    )
+                    item_cat = item_cat[0] if item_cat else {}
+                except Exception as e:
+                    print(f"[SUPABASE][catalogo_servicos][select_nome_servico_valor_padrao] {e}")
+
+                # Fallback local caso a consulta por nome_servico não retorne.
+                if not item_cat:
+                    item_cat = next(
+                        (
+                            i for i in catalogo_bruto
+                            if str(i.get("nome_servico") or i.get("servico") or "").strip() == str(servico_sel).strip()
+                        ),
+                        {},
+                    )
+
+                valor_sugerido = float(to_python_scalar(item_cat.get("valor_padrao") or item_cat.get("valor_sugerido") or 0) or 0)
+                st.caption(f"Valor do Serviço Extra: R$ {valor_sugerido:,.2f}")
                 if str(item_cat.get("inclusos") or "").strip():
                     st.caption(f"Inclusos: {str(item_cat.get('inclusos')).strip()}")
                 titulo_solic = st.text_input("Título da solicitação", value=servico_sel)
