@@ -130,6 +130,9 @@ BUCKET_DOCS_MENSAIS = str(
 BUCKET_DOCS_FIXOS = str(
     st.secrets.get("supabase", {}).get("bucket_documentos_fixos", "documentos-fixos")
 ).strip()
+BUCKET_SERVICOS_EXTRAS = str(
+    st.secrets.get("supabase", {}).get("bucket_servicos_extras", BUCKET_DOCS_MENSAIS)
+).strip()
 
 
 def validar_bucket_storage(bucket_nome: str):
@@ -1154,16 +1157,20 @@ def carregar_contas_receber_consolidadas(escritorio_id: int, mes_ref: str, ano_r
         )
 
     for item in financeiros_mes:
-        chave = _chave_linha(item)
+        item_fin = dict(item)
+        item_fin["_fonte"] = "financeiro_mensal"
+        chave = _chave_linha(item_fin)
         if chave not in chaves:
             chaves.add(chave)
-            consolidadas.append(item)
+            consolidadas.append(item_fin)
 
     for item in receber_mes:
-        chave = _chave_linha(item)
+        item_rec = dict(item)
+        item_rec["_fonte"] = "contas_a_receber"
+        chave = _chave_linha(item_rec)
         if chave not in chaves:
             chaves.add(chave)
-            consolidadas.append(item)
+            consolidadas.append(item_rec)
 
     # Completa com honorários programados sem lançamento no mês (nem financeiro nem contas_a_receber).
     try:
@@ -1206,7 +1213,8 @@ def carregar_contas_receber_consolidadas(escritorio_id: int, mes_ref: str, ano_r
             "data_pagamento": None,
             "mes": str(mes_ref),
             "ano": str(ano_ref),
-            "origem": "programado_cliente"
+            "origem": "programado_cliente",
+            "_fonte": "programado_cliente"
         })
 
     return consolidadas
@@ -1283,7 +1291,7 @@ def criar_solicitacao_servico(
             "titulo": str(titulo).strip(),
             "descricao": str(descricao).strip(),
             "prioridade": str(prioridade).strip() or "Normal",
-            "status": "Aberta",
+            "status": "Pendente",
             "solicitante_email": str(solicitante_email).strip(),
             "data_solicitacao": datetime.now().isoformat()
         }
@@ -1337,9 +1345,9 @@ def processar_solicitacao_servico(
         if cobrar and custo_zero:
             return {"sucesso": False, "mensagem": "Selecione apenas uma opção: Cobrar ou Custo Zero."}
 
-        # Atualização resiliente da solicitação: tenta payload completo, cai para status simples se necessário.
+        # Atualização resiliente da solicitação: move para Em Análise e registra decisão financeira.
         payload_full = {
-            "status": "Processada",
+            "status": "Em Análise",
             "cobrar": bool(cobrar),
             "custo_zero": bool(custo_zero),
             "valor_cobranca": float(valor_servico or 0),
@@ -1349,7 +1357,7 @@ def processar_solicitacao_servico(
         try:
             supabase.table("solicitacoes_servicos").update(payload_full).eq("id", int(solicitacao_id)).eq("escritorio_id", int(escritorio_id)).execute()
         except Exception:
-            supabase.table("solicitacoes_servicos").update({"status": "Processada"}).eq("id", int(solicitacao_id)).eq("escritorio_id", int(escritorio_id)).execute()
+            supabase.table("solicitacoes_servicos").update({"status": "Em Análise"}).eq("id", int(solicitacao_id)).eq("escritorio_id", int(escritorio_id)).execute()
 
         # Integração financeira automática quando houver cobrança.
         if cobrar:
@@ -1379,6 +1387,43 @@ def processar_solicitacao_servico(
         return {"sucesso": True, "mensagem": "Solicitação processada com sucesso."}
     except Exception as e:
         return {"sucesso": False, "mensagem": f"Falha ao processar solicitação: {e}"}
+
+
+def concluir_solicitacao_servico(
+    escritorio_id: int,
+    solicitacao_id: int,
+    arquivo_bytes: bytes | None = None,
+    arquivo_nome: str = "",
+    arquivo_content_type: str = "application/octet-stream",
+    concluido_por: str = ""
+):
+    """Marca solicitação como Concluído e opcionalmente anexa arquivo para o cliente."""
+    try:
+        caminho_anexo = None
+        if arquivo_bytes and arquivo_nome:
+            nome_limpo = f"sol_{int(solicitacao_id)}_{int(datetime.now().timestamp())}_{arquivo_nome}"
+            caminho_anexo = f"servicos-extras/{nome_limpo}"
+            upload_em_bucket(
+                bucket_nome=BUCKET_SERVICOS_EXTRAS,
+                caminho_storage=caminho_anexo,
+                arquivo_bytes=arquivo_bytes,
+                content_type=arquivo_content_type or "application/octet-stream"
+            )
+
+        payload_full = {
+            "status": "Concluído",
+            "data_conclusao": datetime.now().isoformat(),
+            "concluido_por": str(concluido_por).strip(),
+            "anexo_resultado": caminho_anexo
+        }
+        try:
+            supabase.table("solicitacoes_servicos").update(payload_full).eq("id", int(solicitacao_id)).eq("escritorio_id", int(escritorio_id)).execute()
+        except Exception:
+            supabase.table("solicitacoes_servicos").update({"status": "Concluído"}).eq("id", int(solicitacao_id)).eq("escritorio_id", int(escritorio_id)).execute()
+
+        return {"sucesso": True, "mensagem": "Solicitação concluída com sucesso."}
+    except Exception as e:
+        return {"sucesso": False, "mensagem": f"Falha ao concluir solicitação: {e}"}
 
 # ============================================================================
 # MÓDULO: AUTOMAÇÃO DE OBRIGAÇÕES (NOVO CATÁLOGO MESTRE)
@@ -2507,7 +2552,7 @@ def render_financeiro():
         with st.expander("🧾 Serviços Extras (Demandas do Portal do Cliente)", expanded=False):
             try:
                 clientes_map = {int(to_python_scalar(c.get("id"))): str(c.get("nome", "-")).strip() or "-" for c in (clientes_base or []) if c.get("id") is not None}
-                solicitacoes_abertas = carregar_solicitacoes_servicos(escritorio_id=int(escritorio_id), status="Aberta")
+                solicitacoes_abertas = carregar_solicitacoes_servicos(escritorio_id=int(escritorio_id), status="Pendente")
 
                 st.markdown("Lista dedicada de solicitações abertas pelos clientes no portal.")
                 if solicitacoes_abertas:
@@ -2656,7 +2701,7 @@ def render_financeiro():
             st.write("DEBUG df_contas_a_receber (admin)", df_contas_a_receber)
             
             # Cálculos
-            total_recebido = float(df_receber[df_receber["status"] == "Pago"]["valor"].sum()) if not df_receber.empty else 0.0
+            total_recebido = float(df_receber[df_receber["status"].isin(["Pago", "Recebido"])]["valor"].sum()) if not df_receber.empty else 0.0
             total_pendente_receber = float(df_receber[df_receber["status"] == "Pendente"]["valor"].sum()) if not df_receber.empty else 0.0
             total_a_pagar = float(df_pagar["valor"].sum()) if not df_pagar.empty else 0.0
             
@@ -2791,7 +2836,7 @@ def render_financeiro():
                     df_pagar["valor"] = pd.to_numeric(df_pagar["valor"], errors="coerce").fillna(0)
 
                 total_previsto_receber = float(df_receber["valor"].sum()) if not df_receber.empty else 0.0
-                total_recebido = float(df_receber[df_receber["status"] == "Pago"]["valor"].sum()) if not df_receber.empty else 0.0
+                total_recebido = float(df_receber[df_receber["status"].isin(["Pago", "Recebido"])]["valor"].sum()) if not df_receber.empty else 0.0
                 total_pendente_receber = float(df_receber[df_receber["status"] == "Pendente"]["valor"].sum()) if not df_receber.empty else 0.0
 
                 total_previsto_pagar = float(df_pagar["valor"].sum()) if not df_pagar.empty else 0.0
@@ -2821,7 +2866,8 @@ def render_financeiro():
                         else:
                             for idx, row in pendentes_receber.iterrows():
                                 row_id = int(float(to_python_scalar(row.get("id")))) if pd.notna(row.get("id")) else None
-                                if row_id is None:
+                                fonte_row = str(row.get("_fonte") or "").strip().lower()
+                                if row_id is None and fonte_row != "programado_cliente":
                                     continue
                                 col_info, col_btn = st.columns([5, 1])
                                 with col_info:
@@ -2829,14 +2875,36 @@ def render_financeiro():
                                         f"{str(row.get('descricao', '-'))} | R$ {float(to_python_scalar(row.get('valor', 0) or 0)):,.2f} | Venc: {str(row.get('data_vencimento', '-'))}"
                                     )
                                 with col_btn:
-                                    if st.button("Marcar como Pago", key=f"btn_receber_pago_{row_id}_{idx}"):
+                                    if st.button("Baixar", key=f"btn_receber_pago_{row_id}_{idx}_{fonte_row}"):
                                         try:
                                             data_atual = datetime.now().isoformat()
-                                            supabase.table("financeiro_mensal").update({
-                                                "status": "Pago",
-                                                "data_pagamento": data_atual
-                                            }).eq("id", int(row_id)).eq("escritorio_id", escritorio_id).execute()
-                                            st.success("Recebimento atualizado como pago.")
+                                            if fonte_row == "contas_a_receber":
+                                                supabase.table("contas_a_receber").update({
+                                                    "status": "Recebido",
+                                                    "data_pagamento": data_atual
+                                                }).eq("id", int(row_id)).eq("escritorio_id", escritorio_id).execute()
+                                            elif fonte_row == "financeiro_mensal":
+                                                supabase.table("financeiro_mensal").update({
+                                                    "status": "Pago",
+                                                    "data_pagamento": data_atual
+                                                }).eq("id", int(row_id)).eq("escritorio_id", escritorio_id).execute()
+                                            else:
+                                                # Item programado sem id persistido: converte para título real em contas_a_receber e já baixa.
+                                                hoje_lanc = datetime.now()
+                                                supabase.table("contas_a_receber").insert({
+                                                    "escritorio_id": int(escritorio_id),
+                                                    "cliente_id": int(to_python_scalar(row.get("cliente_id") or 0) or 0),
+                                                    "tipo": str(row.get("tipo") or "Mensalidade"),
+                                                    "descricao": str(row.get("descricao") or "Lançamento"),
+                                                    "valor": float(to_python_scalar(row.get("valor") or 0) or 0),
+                                                    "data_vencimento": str(row.get("data_vencimento") or hoje_lanc.strftime("%Y-%m-%d")),
+                                                    "status": "Recebido",
+                                                    "data_pagamento": data_atual,
+                                                    "mes": str(row.get("mes") or LISTA_MESES[hoje_lanc.month - 1]),
+                                                    "ano": str(row.get("ano") or str(hoje_lanc.year)),
+                                                    "data_lancamento": hoje_lanc.strftime("%Y-%m-%d")
+                                                }).execute()
+                                            st.success("Recebimento baixado com sucesso.")
                                             st.rerun()
                                         except Exception:
                                             st.info("Não foi possível baixar o recebimento neste momento.")
@@ -2845,7 +2913,7 @@ def render_financeiro():
 
                     st.markdown("---")
                     st.markdown("### 🔄 Reabertura de Recebimentos")
-                    recebimentos_pagos = df_receber[df_receber["status"] == "Pago"].copy()
+                    recebimentos_pagos = df_receber[df_receber["status"].isin(["Pago", "Recebido"])].copy()
                     if not recebimentos_pagos.empty:
                         st.markdown("Clique no botão para reabrir um recebimento baixado indevidamente:")
                         for idx, row in recebimentos_pagos.iterrows():
@@ -2858,12 +2926,19 @@ def render_financeiro():
                                     f"🔄 {str(row.get('descricao', '-'))} | R$ {float(to_python_scalar(row.get('valor', 0) or 0)):,.2f} | Pago em: {str(row.get('data_pagamento', '-'))}"
                                 )
                             with col_btn:
-                                if st.button("Reabrir", key=f"btn_reabrir_recebimento_{row_id}_{idx}"):
+                                fonte_row = str(row.get("_fonte") or "").strip().lower()
+                                if st.button("Reabrir", key=f"btn_reabrir_recebimento_{row_id}_{idx}_{fonte_row}"):
                                     try:
-                                        supabase.table("financeiro_mensal").update({
-                                            "status": "Pendente",
-                                            "data_pagamento": None
-                                        }).eq("id", int(row_id)).eq("escritorio_id", escritorio_id).execute()
+                                        if fonte_row == "contas_a_receber":
+                                            supabase.table("contas_a_receber").update({
+                                                "status": "Pendente",
+                                                "data_pagamento": None
+                                            }).eq("id", int(row_id)).eq("escritorio_id", escritorio_id).execute()
+                                        else:
+                                            supabase.table("financeiro_mensal").update({
+                                                "status": "Pendente",
+                                                "data_pagamento": None
+                                            }).eq("id", int(row_id)).eq("escritorio_id", escritorio_id).execute()
                                         st.success("Recebimento reaberto com sucesso.")
                                         st.rerun()
                                     except Exception:
@@ -3229,6 +3304,135 @@ def render_financeiro_saas():
         st.error(f"Nao foi possivel carregar o painel financeiro SaaS: {e}")
         st.warning("Verifique se as colunas financeiras existem na tabela escritorios e se o schema do PostgREST esta atualizado.")
 
+
+def render_servicos_extras_solicitados_admin():
+    """Painel dedicado para gestão de serviços extras solicitados por clientes."""
+    perfil_sessao = str(st.session_state.get("perfil", "")).strip().lower()
+    if perfil_sessao != "admin" and not st.session_state.get("is_admin_master", False):
+        st.error("Acesso restrito ao perfil administrativo.")
+        return
+
+    escritorio_id = garantir_escritorio_id()
+    st.title("🧾 Serviços Extras Solicitados")
+    st.markdown("Gerencie solicitações do Portal do Cliente com aprovação financeira e conclusão com anexo.")
+
+    clientes = carregar_clientes()
+    mapa_clientes = {
+        int(to_python_scalar(c.get("id"))): str(c.get("nome", "-")).strip() or "-"
+        for c in clientes
+        if c.get("id") is not None
+    }
+
+    status_filtro = st.selectbox(
+        "Filtrar por Status",
+        ["Todos", "Pendente", "Em Análise", "Concluído"],
+        index=0,
+        key="filtro_status_servicos_extras_admin"
+    )
+
+    solicitacoes = carregar_solicitacoes_servicos(
+        escritorio_id=int(escritorio_id),
+        status=None if status_filtro == "Todos" else status_filtro
+    )
+
+    if not solicitacoes:
+        st.info("Nenhuma solicitação encontrada para o filtro atual.")
+        return
+
+    st.markdown("### 📋 Lista de Solicitações")
+    for item in solicitacoes:
+        sid = int(to_python_scalar(item.get("id") or 0) or 0)
+        cid = int(to_python_scalar(item.get("cliente_id") or 0) or 0)
+        cliente_nome = mapa_clientes.get(cid, f"Cliente ID {cid}")
+        servico_nome = str(item.get("servico_nome") or item.get("titulo") or "Solicitação").strip()
+        status_atual = str(item.get("status") or "Pendente").strip()
+        data_sol = str(item.get("data_solicitacao") or "-")
+        data_conc = str(item.get("data_conclusao") or "-")
+        valor_sugerido = float(to_python_scalar(item.get("valor_sugerido") or 0) or 0)
+
+        with st.expander(f"#{sid} | {cliente_nome} | {servico_nome} | {status_atual}", expanded=False):
+            st.write(f"Data/Hora da Solicitação: {data_sol}")
+            if data_conc and data_conc != "-":
+                st.write(f"Data/Hora da Conclusão: {data_conc}")
+            st.write(f"Descrição: {str(item.get('descricao') or '-').strip()}")
+            st.write(f"Prioridade: {str(item.get('prioridade') or 'Normal').strip()}")
+            st.write(f"Valor sugerido: R$ {valor_sugerido:,.2f}")
+
+            col_a, col_b, col_c = st.columns(3)
+            with col_a:
+                valor_cobranca = st.number_input(
+                    "Valor final (R$)",
+                    min_value=0.0,
+                    step=50.0,
+                    format="%.2f",
+                    value=valor_sugerido,
+                    key=f"valor_cobrar_servico_{sid}"
+                )
+                venc_cobranca = st.date_input(
+                    "Vencimento cobrança",
+                    value=datetime.now(),
+                    key=f"venc_cobrar_servico_{sid}"
+                )
+                if st.button("Aprovar com Cobrança", key=f"btn_aprovar_cobranca_{sid}"):
+                    resultado = processar_solicitacao_servico(
+                        escritorio_id=int(escritorio_id),
+                        solicitacao_id=sid,
+                        cobrar=True,
+                        custo_zero=False,
+                        valor_servico=float(valor_cobranca),
+                        data_vencimento=venc_cobranca.strftime("%Y-%m-%d"),
+                        processado_por=str(st.session_state.get("usuario_logado_email", ""))
+                    )
+                    if resultado.get("sucesso"):
+                        sincronizar_cache_supabase()
+                        st.success("Cobrança aprovada e título criado em contas_a_receber.")
+                        st.rerun()
+                    else:
+                        st.error(resultado.get("mensagem", "Falha ao aprovar cobrança."))
+
+            with col_b:
+                if st.button("Realizar sem Custo", key=f"btn_realizar_zero_{sid}"):
+                    resultado = processar_solicitacao_servico(
+                        escritorio_id=int(escritorio_id),
+                        solicitacao_id=sid,
+                        cobrar=False,
+                        custo_zero=True,
+                        valor_servico=0.0,
+                        data_vencimento=datetime.now().strftime("%Y-%m-%d"),
+                        processado_por=str(st.session_state.get("usuario_logado_email", ""))
+                    )
+                    if resultado.get("sucesso"):
+                        sincronizar_cache_supabase()
+                        st.success("Solicitação registrada como serviço sem custo.")
+                        st.rerun()
+                    else:
+                        st.error(resultado.get("mensagem", "Falha ao registrar serviço sem custo."))
+
+            with col_c:
+                arquivo_resultado = st.file_uploader(
+                    "Anexo de conclusão",
+                    type=["pdf", "xlsx", "xls", "zip", "png", "jpg", "jpeg", "doc", "docx"],
+                    key=f"file_concluir_servico_{sid}"
+                )
+                if st.button("Marcar como Concluído", key=f"btn_concluir_servico_{sid}"):
+                    arquivo_bytes = arquivo_resultado.getvalue() if arquivo_resultado else None
+                    arquivo_nome = arquivo_resultado.name if arquivo_resultado else ""
+                    arquivo_type = arquivo_resultado.type if arquivo_resultado else "application/octet-stream"
+                    resultado = concluir_solicitacao_servico(
+                        escritorio_id=int(escritorio_id),
+                        solicitacao_id=sid,
+                        arquivo_bytes=arquivo_bytes,
+                        arquivo_nome=arquivo_nome,
+                        arquivo_content_type=arquivo_type,
+                        concluido_por=str(st.session_state.get("usuario_logado_email", ""))
+                    )
+                    if resultado.get("sucesso"):
+                        sincronizar_cache_supabase()
+                        st.success("Solicitação concluída com sucesso.")
+                        st.rerun()
+                    else:
+                        st.error(resultado.get("mensagem", "Falha ao concluir solicitação."))
+
 # ============================================================================
 # MÓDULO: PORTAL CLIENTE
 # ============================================================================
@@ -3459,11 +3663,28 @@ def render_portal_cliente():
         solicitacoes_cliente = carregar_solicitacoes_servicos(escritorio_id=int(escritorio_id), cliente_id=int(empresa_atual))
         if solicitacoes_cliente:
             df_solic_cliente = pd.DataFrame(solicitacoes_cliente)
-            cols_solic = [c for c in ["id", "titulo", "descricao", "prioridade", "status", "data_solicitacao"] if c in df_solic_cliente.columns]
+            cols_solic = [c for c in ["id", "servico_nome", "titulo", "descricao", "prioridade", "status", "data_solicitacao", "data_conclusao"] if c in df_solic_cliente.columns]
             if cols_solic:
                 st.dataframe(df_solic_cliente[cols_solic], use_container_width=True)
             else:
                 st.dataframe(df_solic_cliente, use_container_width=True)
+
+            st.markdown("#### 🔗 Anexos de Serviços Concluídos")
+            for item in solicitacoes_cliente:
+                if str(item.get("status") or "").strip().lower() != "concluído":
+                    continue
+                caminho_anexo = str(item.get("anexo_resultado") or "").strip()
+                if not caminho_anexo:
+                    continue
+                try:
+                    url_assinada = gerar_link_assinado(BUCKET_SERVICOS_EXTRAS, caminho_anexo, 120)
+                    if not url_assinada:
+                        raise RuntimeError("URL assinada vazia")
+                    titulo = str(item.get("servico_nome") or item.get("titulo") or f"Solicitação #{item.get('id')}").strip()
+                    data_conc = str(item.get("data_conclusao") or "-")
+                    st.markdown(f"- {titulo} | Concluído em: {data_conc} | <a href=\"{url_assinada}\" target=\"_blank\">Baixar anexo</a>", unsafe_allow_html=True)
+                except Exception:
+                    continue
         else:
             st.info("Você ainda não possui solicitações abertas.")
 
@@ -4029,6 +4250,9 @@ else:
         with st.sidebar:
             opcoes_menu = ["Dashboard Geral", "Documentos e Tarefas", "Cadastrar Cliente", "Central de Obrigações", "Base de Clientes", "Financeiro", "👤 Meu Acesso"]
             icones_menu = ["house", "file-earmark-check", "plus-circle", "calendar-check", "people", "currency-dollar", "person-circle"]
+            if str(st.session_state.get("perfil", "")).strip().lower() == "admin":
+                opcoes_menu.append("🧾 Serviços Extras Solicitados")
+                icones_menu.append("briefcase")
             if st.session_state.get("is_admin_master", False):
                 opcoes_menu.append("💳 Financeiro SaaS")
                 icones_menu.append("credit-card")
@@ -4073,6 +4297,8 @@ else:
             render_base_clientes()
         elif escolha == "Financeiro":
             render_financeiro()
+        elif escolha == "🧾 Serviços Extras Solicitados":
+            render_servicos_extras_solicitados_admin()
         elif escolha == "👤 Meu Acesso":
             render_meu_acesso()
         elif escolha == "💳 Financeiro SaaS":
