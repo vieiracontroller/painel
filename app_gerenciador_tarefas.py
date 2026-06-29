@@ -1211,6 +1211,122 @@ def carregar_contas_receber_consolidadas(escritorio_id: int, mes_ref: str, ano_r
 
     return consolidadas
 
+
+def carregar_solicitacoes_servicos(escritorio_id: int, cliente_id: int | None = None, status: str | None = None):
+    """Carrega solicitações de serviços extras por escritório e filtros opcionais."""
+    try:
+        query = supabase.table("solicitacoes_servicos").select("*").eq("escritorio_id", int(escritorio_id))
+        if cliente_id is not None:
+            query = query.eq("cliente_id", int(cliente_id))
+        if status:
+            query = query.eq("status", str(status))
+        return query.order("id", desc=True).execute().data or []
+    except Exception:
+        return []
+
+
+def criar_solicitacao_servico(
+    escritorio_id: int,
+    cliente_id: int,
+    titulo: str,
+    descricao: str,
+    prioridade: str,
+    solicitante_email: str = ""
+):
+    """Cria uma solicitação do portal do cliente para fila administrativa."""
+    try:
+        payload = {
+            "escritorio_id": int(escritorio_id),
+            "cliente_id": int(cliente_id),
+            "titulo": str(titulo).strip(),
+            "descricao": str(descricao).strip(),
+            "prioridade": str(prioridade).strip() or "Normal",
+            "status": "Aberta",
+            "solicitante_email": str(solicitante_email).strip(),
+            "data_solicitacao": datetime.now().isoformat()
+        }
+        supabase.table("solicitacoes_servicos").insert(payload).execute()
+        return {"sucesso": True, "mensagem": "Solicitação enviada com sucesso."}
+    except Exception as e:
+        return {"sucesso": False, "mensagem": f"Não foi possível enviar a solicitação: {e}"}
+
+
+def processar_solicitacao_servico(
+    escritorio_id: int,
+    solicitacao_id: int,
+    cobrar: bool,
+    custo_zero: bool,
+    valor_servico: float,
+    data_vencimento: str,
+    processado_por: str = ""
+):
+    """
+    Processa solicitação de serviço extra.
+    Se cobrar=True, gera automaticamente lançamento em contas_a_receber.
+    """
+    try:
+        res = (
+            supabase.table("solicitacoes_servicos")
+            .select("*")
+            .eq("id", int(solicitacao_id))
+            .eq("escritorio_id", int(escritorio_id))
+            .limit(1)
+            .execute()
+        )
+        if not res.data:
+            return {"sucesso": False, "mensagem": "Solicitação não encontrada."}
+
+        solic = res.data[0]
+        cliente_id = solic.get("cliente_id")
+        if cliente_id is None:
+            return {"sucesso": False, "mensagem": "Solicitação sem cliente vinculado."}
+
+        if cobrar and custo_zero:
+            return {"sucesso": False, "mensagem": "Selecione apenas uma opção: Cobrar ou Custo Zero."}
+
+        # Atualização resiliente da solicitação: tenta payload completo, cai para status simples se necessário.
+        payload_full = {
+            "status": "Processada",
+            "cobrar": bool(cobrar),
+            "custo_zero": bool(custo_zero),
+            "valor_cobranca": float(valor_servico or 0),
+            "data_processamento": datetime.now().isoformat(),
+            "processado_por": str(processado_por).strip()
+        }
+        try:
+            supabase.table("solicitacoes_servicos").update(payload_full).eq("id", int(solicitacao_id)).eq("escritorio_id", int(escritorio_id)).execute()
+        except Exception:
+            supabase.table("solicitacoes_servicos").update({"status": "Processada"}).eq("id", int(solicitacao_id)).eq("escritorio_id", int(escritorio_id)).execute()
+
+        # Integração financeira automática quando houver cobrança.
+        if cobrar:
+            valor = float(to_python_scalar(valor_servico or 0) or 0)
+            if valor <= 0:
+                return {"sucesso": False, "mensagem": "Informe um valor maior que zero para cobrar."}
+
+            hoje = datetime.now()
+            mes_ref = LISTA_MESES[hoje.month - 1]
+            ano_ref = str(hoje.year)
+            descricao_base = str(solic.get("titulo") or solic.get("descricao") or "Serviço Extra").strip()
+
+            supabase.table("contas_a_receber").insert({
+                "escritorio_id": int(escritorio_id),
+                "cliente_id": int(to_python_scalar(cliente_id)),
+                "tipo": "Serviço Extra",
+                "descricao": f"Serviço Extra - {descricao_base}",
+                "valor": valor,
+                "data_vencimento": str(data_vencimento),
+                "status": "Pendente",
+                "data_pagamento": None,
+                "mes": mes_ref,
+                "ano": ano_ref,
+                "data_lancamento": datetime.now().strftime("%Y-%m-%d")
+            }).execute()
+
+        return {"sucesso": True, "mensagem": "Solicitação processada com sucesso."}
+    except Exception as e:
+        return {"sucesso": False, "mensagem": f"Falha ao processar solicitação: {e}"}
+
 # ============================================================================
 # MÓDULO: AUTOMAÇÃO DE OBRIGAÇÕES (NOVO CATÁLOGO MESTRE)
 # ============================================================================
@@ -2310,6 +2426,69 @@ def render_financeiro():
         st.markdown("---")
         st.subheader("📊 Gestão Financeira")
 
+        with st.expander("🧾 Serviços Extras (Demandas do Portal do Cliente)", expanded=False):
+            try:
+                clientes_map = {int(to_python_scalar(c.get("id"))): str(c.get("nome", "-")).strip() or "-" for c in (clientes_base or []) if c.get("id") is not None}
+                solicitacoes_abertas = carregar_solicitacoes_servicos(escritorio_id=int(escritorio_id), status="Aberta")
+
+                st.markdown("Lista dedicada de solicitações abertas pelos clientes no portal.")
+                if solicitacoes_abertas:
+                    df_solic_admin = pd.DataFrame(solicitacoes_abertas)
+                    if "cliente_id" in df_solic_admin.columns:
+                        df_solic_admin["cliente_nome"] = df_solic_admin["cliente_id"].apply(
+                            lambda cid: clientes_map.get(int(to_python_scalar(cid) or 0), f"Cliente ID {cid}")
+                        )
+                    cols_admin = [c for c in ["id", "cliente_nome", "titulo", "descricao", "prioridade", "status", "data_solicitacao"] if c in df_solic_admin.columns]
+                    st.dataframe(df_solic_admin[cols_admin] if cols_admin else df_solic_admin, use_container_width=True)
+
+                    opcoes = []
+                    mapa_solic = {}
+                    for item in solicitacoes_abertas:
+                        sid = int(to_python_scalar(item.get("id") or 0) or 0)
+                        cid = int(to_python_scalar(item.get("cliente_id") or 0) or 0)
+                        cliente_nome = clientes_map.get(cid, f"Cliente ID {cid}")
+                        titulo_item = str(item.get("titulo") or item.get("descricao") or "Solicitação").strip()
+                        label = f"#{sid} | {cliente_nome} | {titulo_item}"
+                        opcoes.append(label)
+                        mapa_solic[label] = item
+
+                    with st.form("form_processar_solicitacao_servico"):
+                        solic_label = st.selectbox("Selecionar solicitação", opcoes, key="sel_solic_admin")
+                        cobrar_servico = st.checkbox("Cobrar", key="chk_cobrar_solic")
+                        custo_zero = st.checkbox("Custo Zero", key="chk_custo_zero_solic")
+                        valor_solic = st.number_input("Valor do serviço (R$)", min_value=0.0, step=50.0, format="%.2f", key="valor_cob_solic")
+                        data_venc_solic = st.date_input("Data de vencimento (se cobrar)", value=datetime.now(), key="venc_cob_solic")
+
+                        if st.form_submit_button("Processar Solicitação"):
+                            item_sel = mapa_solic.get(solic_label)
+                            if not item_sel:
+                                st.error("Solicitação inválida.")
+                            else:
+                                if cobrar_servico and custo_zero:
+                                    st.error("Selecione apenas uma opção: Cobrar ou Custo Zero.")
+                                else:
+                                    resultado_proc = processar_solicitacao_servico(
+                                        escritorio_id=int(escritorio_id),
+                                        solicitacao_id=int(to_python_scalar(item_sel.get("id"))),
+                                        cobrar=bool(cobrar_servico),
+                                        custo_zero=bool(custo_zero),
+                                        valor_servico=float(valor_solic),
+                                        data_vencimento=data_venc_solic.strftime("%Y-%m-%d"),
+                                        processado_por=str(st.session_state.get("usuario_logado_email", ""))
+                                    )
+                                    if resultado_proc.get("sucesso"):
+                                        sincronizar_cache_supabase()
+                                        st.success("✅ Solicitação processada com sucesso.")
+                                        if cobrar_servico:
+                                            st.info("💰 Cobrança lançada automaticamente em contas_a_receber.")
+                                        st.rerun()
+                                    else:
+                                        st.error(resultado_proc.get("mensagem", "Falha ao processar solicitação."))
+                else:
+                    st.info("Nenhuma solicitação aberta no momento.")
+            except Exception as e:
+                st.warning(f"Não foi possível carregar as demandas de serviços extras: {e}")
+
         # ===== DASHBOARD FINANCEIRO =====
         try:
             resultado_hon = gerar_honorarios_mensais_automatico()
@@ -2994,7 +3173,12 @@ def render_portal_cliente():
     st.markdown("Acesse seus documentos, mensalidades e informações de acesso.")
 
     # ABAS DO PORTAL DO CLIENTE
-    tab_usuario, tab_documentos, tab_mensalidades = st.tabs(["👤 Meu Usuário", "📁 Documentos e Guias", "💳 Minhas Mensalidades"])
+    tab_usuario, tab_documentos, tab_solicitar, tab_mensalidades = st.tabs([
+        "👤 Meu Usuário",
+        "📁 Documentos e Guias",
+        "🛎️ Solicitar Serviço",
+        "💳 Minhas Mensalidades"
+    ])
 
     # ========== ABA: MEU USUÁRIO ==========
     with tab_usuario:
@@ -3132,6 +3316,47 @@ def render_portal_cliente():
             else:
                 st.warning("Nenhum guia ou imposto mensal disponível para a competência selecionada.")
 
+    # ========== ABA: SOLICITAR SERVIÇO ==========
+    with tab_solicitar:
+        st.subheader("🛎️ Solicitar Serviço")
+        st.markdown("Abra chamados para serviços extras. O escritório irá analisar e processar sua demanda.")
+
+        with st.form("form_solicitar_servico_cliente"):
+            titulo_solic = st.text_input("Título da solicitação", placeholder="Ex: Abertura de filial")
+            descricao_solic = st.text_area("Descreva o serviço solicitado", placeholder="Detalhe o que precisa e prazo desejado...")
+            prioridade_solic = st.selectbox("Prioridade", ["Baixa", "Normal", "Alta", "Urgente"], index=1)
+
+            if st.form_submit_button("Enviar Solicitação"):
+                if not titulo_solic.strip() or not descricao_solic.strip():
+                    st.error("Preencha título e descrição da solicitação.")
+                else:
+                    resultado_solic = criar_solicitacao_servico(
+                        escritorio_id=int(escritorio_id),
+                        cliente_id=int(empresa_atual),
+                        titulo=titulo_solic,
+                        descricao=descricao_solic,
+                        prioridade=prioridade_solic,
+                        solicitante_email=str(st.session_state.get("usuario_logado_email", ""))
+                    )
+                    if resultado_solic.get("sucesso"):
+                        st.success("✅ Solicitação enviada com sucesso.")
+                        st.rerun()
+                    else:
+                        st.error(resultado_solic.get("mensagem", "Falha ao enviar solicitação."))
+
+        st.markdown("---")
+        st.markdown("### 📋 Minhas Solicitações")
+        solicitacoes_cliente = carregar_solicitacoes_servicos(escritorio_id=int(escritorio_id), cliente_id=int(empresa_atual))
+        if solicitacoes_cliente:
+            df_solic_cliente = pd.DataFrame(solicitacoes_cliente)
+            cols_solic = [c for c in ["id", "titulo", "descricao", "prioridade", "status", "data_solicitacao"] if c in df_solic_cliente.columns]
+            if cols_solic:
+                st.dataframe(df_solic_cliente[cols_solic], use_container_width=True)
+            else:
+                st.dataframe(df_solic_cliente, use_container_width=True)
+        else:
+            st.info("Você ainda não possui solicitações abertas.")
+
     # ========== ABA: MINHAS MENSALIDADES ==========
     with tab_mensalidades:
         st.subheader("💳 Minhas Mensalidades")
@@ -3148,7 +3373,13 @@ def render_portal_cliente():
 
         try:
             financeiro_cliente = supabase.table("financeiro_mensal").select("*").eq("cliente_id", int(empresa_atual)).eq("escritorio_id", escritorio_id).execute().data or []
+            try:
+                contas_receber_cliente = supabase.table("contas_a_receber").select("*").eq("cliente_id", int(empresa_atual)).eq("escritorio_id", escritorio_id).execute().data or []
+            except Exception:
+                contas_receber_cliente = []
+
             df_financeiro = pd.DataFrame(financeiro_cliente)
+            df_receber_cliente = pd.DataFrame(contas_receber_cliente)
 
             mensalidade_atual = None
             if not df_financeiro.empty:
@@ -3185,7 +3416,27 @@ def render_portal_cliente():
                         "Data de Pagamento": str(extra.get("data_pagamento", ""))
                     })
 
+            # Complementa com contas_a_receber para refletir cobranças de serviços extras imediatamente.
+            if not df_receber_cliente.empty:
+                filtro_receber_mes = df_receber_cliente[
+                    (df_receber_cliente["mes"].astype(str) == mes_atual) &
+                    (df_receber_cliente["ano"].astype(str) == ano_atual)
+                ]
+                for _, extra in filtro_receber_mes.iterrows():
+                    lancamentos_mes_atual.append({
+                        "Descrição": str(extra.get("descricao", str(extra.get("tipo", "Serviço")))),
+                        "Valor": float(to_python_scalar(extra.get("valor", 0) or 0)),
+                        "Data de Vencimento": str(extra.get("data_vencimento", "")),
+                        "Status": str(extra.get("status", "Pendente")),
+                        "Data de Pagamento": str(extra.get("data_pagamento", ""))
+                    })
+
             df_mes_atual = pd.DataFrame(lancamentos_mes_atual)
+            if not df_mes_atual.empty:
+                df_mes_atual = df_mes_atual.drop_duplicates(
+                    subset=["Descrição", "Valor", "Data de Vencimento", "Status", "Data de Pagamento"],
+                    keep="first"
+                )
 
             st.markdown("### 💳 Mensalidades e Serviços Pendentes")
             if not df_mes_atual.empty:
@@ -3199,8 +3450,15 @@ def render_portal_cliente():
 
             st.markdown("---")
             st.markdown("### ✅ Histórico de Pagamentos (Pagas)")
+            df_historico_partes = []
             if not df_financeiro.empty:
-                df_pagas = df_financeiro[df_financeiro["status"].astype(str) == "Pago"].copy()
+                df_historico_partes.append(df_financeiro.copy())
+            if not df_receber_cliente.empty:
+                df_historico_partes.append(df_receber_cliente.copy())
+
+            if df_historico_partes:
+                df_historico = pd.concat(df_historico_partes, ignore_index=True)
+                df_pagas = df_historico[df_historico["status"].astype(str) == "Pago"].copy()
                 if not df_pagas.empty:
                     df_pagas_exib = pd.DataFrame({
                         "Descrição": df_pagas.get("descricao", "-").fillna("-") if "descricao" in df_pagas.columns else "-",
