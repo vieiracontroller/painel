@@ -3900,19 +3900,20 @@ def render_portal_cliente():
                     .select("*")
                     .eq("cliente_id", int(empresa_atual))
                     .eq("escritorio_id", escritorio_id)
-                    .in_("status", ["Pago", "Baixado"])
+                    .in_("status", ["Pago", "Baixado", "Recebido"])
                     .execute()
                     .data
                     or []
                 )
             except Exception as e_hist:
-                print(f"[SUPABASE][contas_a_receber][select_historico_pago_baixado] {e_hist}")
+                print(f"[SUPABASE][contas_a_receber][select_historico_pago_baixado_recebido] {e_hist}")
                 contas_receber_baixadas = []
 
             df_financeiro = pd.DataFrame(financeiro_cliente)
             df_receber_cliente = pd.DataFrame(contas_receber_cliente)
 
             mensalidade_atual = None
+            status_baixa = {"Pago", "Baixado", "Recebido"}
             if not df_financeiro.empty:
                 filtro_mensalidade = df_financeiro[
                     (df_financeiro["tipo"].astype(str) == "Mensalidade") &
@@ -3921,6 +3922,20 @@ def render_portal_cliente():
                 ]
                 if not filtro_mensalidade.empty:
                     mensalidade_atual = filtro_mensalidade.iloc[0]
+
+            # Se houver mensalidade em contas_a_receber para o mês, ela prevalece quando estiver baixada.
+            if not df_receber_cliente.empty:
+                filtro_mensalidade_receber = df_receber_cliente[
+                    (df_receber_cliente["tipo"].astype(str) == "Mensalidade") &
+                    (df_receber_cliente["mes"].astype(str) == mes_atual) &
+                    (df_receber_cliente["ano"].astype(str) == ano_atual)
+                ]
+                if not filtro_mensalidade_receber.empty:
+                    mensalidade_receber = filtro_mensalidade_receber.iloc[0]
+                    status_receber = str(mensalidade_receber.get("status", "")).strip()
+                    status_fin = str(mensalidade_atual.get("status", "")).strip() if mensalidade_atual is not None else ""
+                    if mensalidade_atual is None or (status_receber in status_baixa and status_fin not in status_baixa):
+                        mensalidade_atual = mensalidade_receber
 
             lancamentos_mes_atual = []
             if valor_honorario > 0:
@@ -3950,6 +3965,7 @@ def render_portal_cliente():
             # Complementa com contas_a_receber para refletir cobranças de serviços extras imediatamente.
             if not df_receber_cliente.empty:
                 filtro_receber_mes = df_receber_cliente[
+                    (df_receber_cliente["tipo"].astype(str) != "Mensalidade") &
                     (df_receber_cliente["mes"].astype(str) == mes_atual) &
                     (df_receber_cliente["ano"].astype(str) == ano_atual)
                 ]
@@ -3989,7 +4005,7 @@ def render_portal_cliente():
 
             if df_historico_partes:
                 df_historico = pd.concat(df_historico_partes, ignore_index=True)
-                df_pagas = df_historico[df_historico["status"].astype(str).isin(["Pago", "Baixado"])].copy()
+                df_pagas = df_historico[df_historico["status"].astype(str).isin(["Pago", "Baixado", "Recebido"])].copy()
                 if not df_pagas.empty:
                     df_pagas_exib = pd.DataFrame({
                         "Descrição": df_pagas.get("descricao", "-").fillna("-") if "descricao" in df_pagas.columns else "-",
