@@ -1305,7 +1305,7 @@ def criar_solicitacao_servico(
 
 def processar_solicitacao_servico(
     escritorio_id: int,
-    solicitacao_id: int,
+    solicitacao_id: str,
     cobrar: bool,
     custo_zero: bool,
     valor_servico: float,
@@ -1320,7 +1320,7 @@ def processar_solicitacao_servico(
         res = (
             supabase.table("solicitacoes_servicos")
             .select("*")
-            .eq("id", int(solicitacao_id))
+            .eq("id", str(solicitacao_id).strip())
             .eq("escritorio_id", int(escritorio_id))
             .limit(1)
             .execute()
@@ -1346,9 +1346,9 @@ def processar_solicitacao_servico(
             "processado_por": str(processado_por).strip()
         }
         try:
-            supabase.table("solicitacoes_servicos").update(payload_full).eq("id", int(solicitacao_id)).eq("escritorio_id", int(escritorio_id)).execute()
+            supabase.table("solicitacoes_servicos").update(payload_full).eq("id", str(solicitacao_id).strip()).eq("escritorio_id", int(escritorio_id)).execute()
         except Exception:
-            supabase.table("solicitacoes_servicos").update({"status": "Em Análise"}).eq("id", int(solicitacao_id)).eq("escritorio_id", int(escritorio_id)).execute()
+            supabase.table("solicitacoes_servicos").update({"status": "Em Análise"}).eq("id", str(solicitacao_id).strip()).eq("escritorio_id", int(escritorio_id)).execute()
 
         # Integração financeira automática quando houver cobrança.
         if cobrar:
@@ -1382,7 +1382,7 @@ def processar_solicitacao_servico(
 
 def concluir_solicitacao_servico(
     escritorio_id: int,
-    solicitacao_id: int,
+    solicitacao_id: str,
     arquivo_bytes: bytes | None = None,
     arquivo_nome: str = "",
     arquivo_content_type: str = "application/octet-stream",
@@ -1391,8 +1391,10 @@ def concluir_solicitacao_servico(
     """Marca solicitação como Concluído e opcionalmente anexa arquivo para o cliente."""
     try:
         caminho_anexo = None
+        sid_txt = str(solicitacao_id).strip()
+        sid_safe = "".join(ch for ch in sid_txt if ch.isalnum() or ch in ("-", "_")) or "solicitacao"
         if arquivo_bytes and arquivo_nome:
-            nome_limpo = f"sol_{int(solicitacao_id)}_{int(datetime.now().timestamp())}_{arquivo_nome}"
+            nome_limpo = f"sol_{sid_safe}_{int(datetime.now().timestamp())}_{arquivo_nome}"
             caminho_anexo = f"servicos-extras/{nome_limpo}"
             upload_em_bucket(
                 bucket_nome=BUCKET_SERVICOS_EXTRAS,
@@ -1408,9 +1410,9 @@ def concluir_solicitacao_servico(
             "anexo_url": caminho_anexo
         }
         try:
-            supabase.table("solicitacoes_servicos").update(payload_full).eq("id", int(solicitacao_id)).eq("escritorio_id", int(escritorio_id)).execute()
+            supabase.table("solicitacoes_servicos").update(payload_full).eq("id", sid_txt).eq("escritorio_id", int(escritorio_id)).execute()
         except Exception:
-            supabase.table("solicitacoes_servicos").update({"status": "Concluído"}).eq("id", int(solicitacao_id)).eq("escritorio_id", int(escritorio_id)).execute()
+            supabase.table("solicitacoes_servicos").update({"status": "Concluído"}).eq("id", sid_txt).eq("escritorio_id", int(escritorio_id)).execute()
 
         return {"sucesso": True, "mensagem": "Solicitação concluída com sucesso."}
     except Exception as e:
@@ -2558,7 +2560,9 @@ def render_financeiro():
                     opcoes = []
                     mapa_solic = {}
                     for item in solicitacoes_abertas:
-                        sid = int(to_python_scalar(item.get("id") or 0) or 0)
+                        sid = str(to_python_scalar(item.get("id") or "") or "").strip()
+                        if not sid:
+                            continue
                         cid = int(to_python_scalar(item.get("cliente_id") or 0) or 0)
                         cliente_nome = clientes_map.get(cid, f"Cliente ID {cid}")
                         servico_nome = str(item.get("servico_selecionado") or item.get("titulo") or item.get("descricao") or "Solicitação").strip()
@@ -2586,7 +2590,7 @@ def render_financeiro():
                                 else:
                                     resultado_proc = processar_solicitacao_servico(
                                         escritorio_id=int(escritorio_id),
-                                        solicitacao_id=int(to_python_scalar(item_sel.get("id"))),
+                                        solicitacao_id=str(to_python_scalar(item_sel.get("id") or "") or "").strip(),
                                         cobrar=bool(cobrar_servico),
                                         custo_zero=bool(custo_zero),
                                         valor_servico=float(valor_solic),
@@ -2856,9 +2860,10 @@ def render_financeiro():
                             st.success("Nenhum recebimento pendente para baixa.")
                         else:
                             for idx, row in pendentes_receber.iterrows():
-                                row_id = int(float(to_python_scalar(row.get("id")))) if pd.notna(row.get("id")) else None
+                                row_id = to_python_scalar(row.get("id")) if pd.notna(row.get("id")) else None
+                                row_id_txt = str(row_id).strip() if row_id is not None else ""
                                 fonte_row = str(row.get("_fonte") or "").strip().lower()
-                                if row_id is None and fonte_row != "programado_cliente":
+                                if not row_id_txt and fonte_row != "programado_cliente":
                                     continue
                                 col_info, col_btn = st.columns([5, 1])
                                 with col_info:
@@ -2866,19 +2871,19 @@ def render_financeiro():
                                         f"{str(row.get('descricao', '-'))} | R$ {float(to_python_scalar(row.get('valor', 0) or 0)):,.2f} | Venc: {str(row.get('data_vencimento', '-'))}"
                                     )
                                 with col_btn:
-                                    if st.button("Baixar", key=f"btn_receber_pago_{row_id}_{idx}_{fonte_row}"):
+                                    if st.button("Baixar", key=f"btn_receber_pago_{row_id_txt}_{idx}_{fonte_row}"):
                                         try:
                                             data_atual = datetime.now().isoformat()
                                             if fonte_row == "contas_a_receber":
                                                 supabase.table("contas_a_receber").update({
                                                     "status": "Recebido",
                                                     "data_pagamento": data_atual
-                                                }).eq("id", int(row_id)).eq("escritorio_id", escritorio_id).execute()
+                                                }).eq("id", row_id).eq("escritorio_id", escritorio_id).execute()
                                             elif fonte_row == "financeiro_mensal":
                                                 supabase.table("financeiro_mensal").update({
                                                     "status": "Pago",
                                                     "data_pagamento": data_atual
-                                                }).eq("id", int(row_id)).eq("escritorio_id", escritorio_id).execute()
+                                                }).eq("id", row_id).eq("escritorio_id", escritorio_id).execute()
                                             else:
                                                 # Item programado sem id persistido: converte para título real em contas_a_receber e já baixa.
                                                 hoje_lanc = datetime.now()
@@ -2897,8 +2902,11 @@ def render_financeiro():
                                                 }).execute()
                                             st.success("Recebimento baixado com sucesso.")
                                             st.rerun()
-                                        except Exception:
-                                            st.info("Não foi possível baixar o recebimento neste momento.")
+                                        except Exception as e:
+                                            msg_erro = str(e)
+                                            st.error(f"Erro ao baixar recebimento: {msg_erro}")
+                                            if "permission" in msg_erro.lower() or "rls" in msg_erro.lower() or "not allowed" in msg_erro.lower():
+                                                st.error("A política RLS da tabela financeira precisa permitir UPDATE para o role authenticated.")
                     else:
                         st.info("Nenhum lançamento encontrado em contas a receber para o mês atual.")
 
@@ -2908,8 +2916,9 @@ def render_financeiro():
                     if not recebimentos_pagos.empty:
                         st.markdown("Clique no botão para reabrir um recebimento baixado indevidamente:")
                         for idx, row in recebimentos_pagos.iterrows():
-                            row_id = int(float(to_python_scalar(row.get("id")))) if pd.notna(row.get("id")) else None
-                            if row_id is None:
+                            row_id = to_python_scalar(row.get("id")) if pd.notna(row.get("id")) else None
+                            row_id_txt = str(row_id).strip() if row_id is not None else ""
+                            if not row_id_txt:
                                 continue
                             col_info, col_btn = st.columns([5, 1])
                             with col_info:
@@ -2918,22 +2927,22 @@ def render_financeiro():
                                 )
                             with col_btn:
                                 fonte_row = str(row.get("_fonte") or "").strip().lower()
-                                if st.button("Reabrir", key=f"btn_reabrir_recebimento_{row_id}_{idx}_{fonte_row}"):
+                                if st.button("Reabrir", key=f"btn_reabrir_recebimento_{row_id_txt}_{idx}_{fonte_row}"):
                                     try:
                                         if fonte_row == "contas_a_receber":
                                             supabase.table("contas_a_receber").update({
                                                 "status": "Pendente",
                                                 "data_pagamento": None
-                                            }).eq("id", int(row_id)).eq("escritorio_id", escritorio_id).execute()
+                                            }).eq("id", row_id).eq("escritorio_id", escritorio_id).execute()
                                         else:
                                             supabase.table("financeiro_mensal").update({
                                                 "status": "Pendente",
                                                 "data_pagamento": None
-                                            }).eq("id", int(row_id)).eq("escritorio_id", escritorio_id).execute()
+                                            }).eq("id", row_id).eq("escritorio_id", escritorio_id).execute()
                                         st.success("Recebimento reaberto com sucesso.")
                                         st.rerun()
-                                    except Exception:
-                                        st.info("Não foi possível reabrir o recebimento neste momento.")
+                                    except Exception as e:
+                                        st.error(f"Erro ao reabrir recebimento: {e}")
                     else:
                         st.info("Nenhum recebimento pago para reabrir.")
 
@@ -3332,7 +3341,9 @@ def render_servicos_extras_solicitados_admin():
 
     st.markdown("### 📋 Lista de Solicitações")
     for item in solicitacoes:
-        sid = int(to_python_scalar(item.get("id") or 0) or 0)
+        sid = str(to_python_scalar(item.get("id") or "") or "").strip()
+        if not sid:
+            continue
         cid = int(to_python_scalar(item.get("cliente_id") or 0) or 0)
         cliente_nome = mapa_clientes.get(cid, f"Cliente ID {cid}")
         servico_nome = str(item.get("servico_selecionado") or item.get("titulo") or "Solicitação").strip()
