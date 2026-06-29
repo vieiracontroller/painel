@@ -1036,6 +1036,20 @@ def gerar_data_vencimento(ano: str, mes: str, dia: int):
         return datetime.now().strftime("%Y-%m-%d")
 
 
+def extrair_mes_ano_data_vencimento(data_vencimento):
+    """Converte data_vencimento em (mes_nome, ano_str)."""
+    try:
+        dt = pd.to_datetime(data_vencimento, errors="coerce")
+        if pd.isna(dt):
+            return "", ""
+        mes_idx = int(dt.month)
+        if mes_idx < 1 or mes_idx > 12:
+            return "", ""
+        return LISTA_MESES[mes_idx - 1], str(int(dt.year))
+    except Exception:
+        return "", ""
+
+
 def sincronizar_honorario_em_contas_a_receber(
     escritorio_id: int,
     cliente_id: int,
@@ -1078,18 +1092,21 @@ def sincronizar_honorario_em_contas_a_receber(
         try:
             receber_mes = (
                 supabase.table("contas_a_receber")
-                .select("id")
+                .select("id,data_vencimento")
                 .eq("escritorio_id", escritorio_id)
                 .eq("cliente_id", int(cliente_id))
                 .eq("tipo", "Mensalidade")
-                .eq("mes", mes_ref)
-                .eq("ano", ano_ref)
-                .limit(1)
                 .execute()
                 .data
                 or []
             )
-            if receber_mes:
+            existe_mes_atual = False
+            for item in receber_mes:
+                mes_item, ano_item = extrair_mes_ano_data_vencimento(item.get("data_vencimento"))
+                if mes_item == mes_ref and ano_item == ano_ref:
+                    existe_mes_atual = True
+                    break
+            if existe_mes_atual:
                 return {"sucesso": True, "inseriu": False, "mensagem": "Mensalidade já existente em contas_a_receber."}
         except Exception:
             # Se a tabela não existir ou schema divergir, segue para tentativa de insert e captura abaixo.
@@ -1105,8 +1122,6 @@ def sincronizar_honorario_em_contas_a_receber(
             "data_vencimento": data_venc,
             "status": "Pendente",
             "data_pagamento": None,
-            "mes": mes_ref,
-            "ano": ano_ref,
             "data_lancamento": datetime.now().strftime("%Y-%m-%d")
         }).execute()
 
@@ -1137,22 +1152,26 @@ def carregar_contas_receber_consolidadas(escritorio_id: int, mes_ref: str, ano_r
         if str(r.get("mes", "")).strip() == str(mes_ref)
         and str(r.get("ano", "")).strip() == str(ano_ref)
     ]
-    receber_mes = [
-        r for r in contas_receber
-        if str(r.get("mes", "")).strip() == str(mes_ref)
-        and str(r.get("ano", "")).strip() == str(ano_ref)
-    ]
+    receber_mes = []
+    for r in contas_receber:
+        mes_item, ano_item = extrair_mes_ano_data_vencimento(r.get("data_vencimento"))
+        if mes_item == str(mes_ref) and ano_item == str(ano_ref):
+            receber_mes.append(r)
 
     consolidadas = []
     chaves = set()
 
     def _chave_linha(item: dict):
+        mes_item, ano_item = extrair_mes_ano_data_vencimento(item.get("data_vencimento"))
+        if not mes_item or not ano_item:
+            mes_item = str(mes_ref)
+            ano_item = str(ano_ref)
         return (
             int(to_python_scalar(item.get("cliente_id") or 0) or 0),
             str(item.get("tipo") or "").strip().lower(),
             str(item.get("descricao") or "").strip().lower(),
-            str(item.get("mes") or "").strip(),
-            str(item.get("ano") or "").strip(),
+            str(mes_item),
+            str(ano_item),
             round(float(to_python_scalar(item.get("valor") or 0) or 0), 2),
         )
 
@@ -1428,9 +1447,6 @@ def processar_solicitacao_servico(
             if valor <= 0:
                 return {"sucesso": False, "mensagem": "Informe um valor maior que zero para cobrar."}
 
-            hoje = datetime.now()
-            mes_ref = LISTA_MESES[hoje.month - 1]
-            ano_ref = str(hoje.year)
             descricao_base = str(solic.get("servico_selecionado") or solic.get("titulo") or solic.get("descricao") or "Serviço Extra").strip()
 
             try:
@@ -1443,8 +1459,6 @@ def processar_solicitacao_servico(
                     "data_vencimento": str(data_vencimento),
                     "status": "Pendente",
                     "data_pagamento": None,
-                    "mes": mes_ref,
-                    "ano": ano_ref,
                     "data_lancamento": datetime.now().strftime("%Y-%m-%d")
                 }).execute()
             except Exception as e_contas:
@@ -1452,7 +1466,7 @@ def processar_solicitacao_servico(
                     "sucesso": False,
                     "mensagem": formatar_erro_supabase_tabela_coluna(
                         "contas_a_receber",
-                        ["escritorio_id", "cliente_id", "tipo", "descricao", "valor", "data_vencimento", "status", "data_pagamento", "mes", "ano", "data_lancamento"],
+                        ["escritorio_id", "cliente_id", "tipo", "descricao", "valor", "data_vencimento", "status", "data_pagamento", "data_lancamento"],
                         e_contas,
                     ),
                 }
@@ -3044,15 +3058,13 @@ def render_financeiro():
                                                     "data_vencimento": str(row.get("data_vencimento") or hoje_lanc.strftime("%Y-%m-%d")),
                                                     "status": "Recebido",
                                                     "data_pagamento": data_atual,
-                                                    "mes": str(row.get("mes") or LISTA_MESES[hoje_lanc.month - 1]),
-                                                    "ano": str(row.get("ano") or str(hoje_lanc.year)),
                                                     "data_lancamento": hoje_lanc.strftime("%Y-%m-%d")
                                                 }).execute()
                                             st.success("Recebimento baixado com sucesso.")
                                             st.rerun()
                                         except Exception as e:
                                             msg_erro = str(e)
-                                            st.error(formatar_erro_supabase_tabela_coluna("contas_a_receber", ["id", "escritorio_id", "status", "data_pagamento", "cliente_id", "tipo", "descricao", "valor", "data_vencimento", "mes", "ano", "data_lancamento"], e))
+                                            st.error(formatar_erro_supabase_tabela_coluna("contas_a_receber", ["id", "escritorio_id", "status", "data_pagamento", "cliente_id", "tipo", "descricao", "valor", "data_vencimento", "data_lancamento"], e))
                                             if "permission" in msg_erro.lower() or "rls" in msg_erro.lower() or "not allowed" in msg_erro.lower():
                                                 st.error("A política RLS da tabela financeira precisa permitir UPDATE para o role authenticated.")
                     else:
@@ -3915,6 +3927,10 @@ def render_portal_cliente():
 
             df_financeiro = pd.DataFrame(financeiro_cliente)
             df_receber_cliente = pd.DataFrame(contas_receber_cliente)
+            if not df_receber_cliente.empty:
+                mes_ano_series = df_receber_cliente["data_vencimento"].apply(extrair_mes_ano_data_vencimento)
+                df_receber_cliente["_mes_calc"] = mes_ano_series.apply(lambda x: x[0])
+                df_receber_cliente["_ano_calc"] = mes_ano_series.apply(lambda x: x[1])
 
             mensalidade_atual = None
             status_baixa = {"pago", "baixado", "recebido"}
@@ -3934,8 +3950,8 @@ def render_portal_cliente():
             if not df_receber_cliente.empty:
                 filtro_mensalidade_receber = df_receber_cliente[
                     (df_receber_cliente["tipo"].astype(str).str.strip().str.lower() == "mensalidade") &
-                    (df_receber_cliente["mes"].astype(str).str.strip() == mes_atual) &
-                    (df_receber_cliente["ano"].astype(str).str.strip() == ano_atual)
+                    (df_receber_cliente["_mes_calc"].astype(str).str.strip() == mes_atual) &
+                    (df_receber_cliente["_ano_calc"].astype(str).str.strip() == ano_atual)
                 ]
                 if not filtro_mensalidade_receber.empty:
                     filtro_mensalidade_receber = filtro_mensalidade_receber.copy()
@@ -3976,8 +3992,8 @@ def render_portal_cliente():
             if not df_receber_cliente.empty:
                 filtro_receber_mes = df_receber_cliente[
                     (df_receber_cliente["tipo"].astype(str) != "Mensalidade") &
-                    (df_receber_cliente["mes"].astype(str) == mes_atual) &
-                    (df_receber_cliente["ano"].astype(str) == ano_atual)
+                    (df_receber_cliente["_mes_calc"].astype(str).str.strip() == mes_atual) &
+                    (df_receber_cliente["_ano_calc"].astype(str).str.strip() == ano_atual)
                 ]
                 for _, extra in filtro_receber_mes.iterrows():
                     lancamentos_mes_atual.append({
