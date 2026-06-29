@@ -1249,10 +1249,19 @@ def render_dashboard():
     st.markdown("---")
     st.markdown("### Últimas tarefas cadastradas")
     if not df_tarefas.empty and not df_clientes.empty:
-        df_exibicao = df_tarefas.merge(df_clientes[["id", "nome"]], left_on="cliente_id", right_on="id", how="left")
-        df_exibicao = df_exibicao[["id", "nome", "obrigacao", "periodicidade", "mes", "ano", "vencimento", "status"]]
-        df_exibicao.columns = ["ID", "Cliente", "Obrigação", "Periodicidade", "Mês", "Ano", "Prazo", "Status"]
-        st.dataframe(df_exibicao.sort_values(by=["Ano", "Mês"], ascending=False).head(10), use_container_width=True)
+        df_exibicao = df_tarefas.merge(df_clientes[["id", "nome"]], left_on="cliente_id", right_on="id", how="left", suffixes=("", "_cliente"))
+        
+        # ===== SELEÇÃO RESILIENTE DE COLUNAS =====
+        colunas_esperadas = ["id", "nome", "obrigacao", "periodicidade", "mes", "ano", "vencimento", "status"]
+        colunas_existentes = [col for col in colunas_esperadas if col in df_exibicao.columns]
+        
+        if colunas_existentes:
+            df_exibicao = df_exibicao[colunas_existentes]
+            nomes_colunas_novo = ["ID" if col == "id" else "Cliente" if col == "nome" else "Obrigação" if col == "obrigacao" else "Periodicidade" if col == "periodicidade" else "Mês" if col == "mes" else "Ano" if col == "ano" else "Prazo" if col == "vencimento" else "Status" for col in colunas_existentes]
+            df_exibicao.columns = nomes_colunas_novo
+            st.dataframe(df_exibicao.sort_values(by=[c for c in ["Ano", "Mês"] if c in df_exibicao.columns], ascending=False).head(10), use_container_width=True)
+        else:
+            st.warning("⚠️ Colunas esperadas não encontradas. Verifique a estrutura das tarefas no banco.")
 
         tarefas_pendentes = df_tarefas[df_tarefas["status"] == "Pendente"]
         if not tarefas_pendentes.empty:
@@ -1937,19 +1946,45 @@ def render_financeiro():
             if resultado_hon.get("inseridas", 0) > 0:
                 st.info(f"✅ {resultado_hon.get('mensagem')}")
             
-            # Carregar dados financeiros
+            # ===== SELETOR DE MÊS/ANO COM DEBUG =====
+            col_filtro1, col_filtro2 = st.columns(2)
             hoje = datetime.now()
-            mes_ref = LISTA_MESES[hoje.month - 1]
-            ano_ref = str(hoje.year)
             
+            with col_filtro1:
+                mes_selecionado = st.selectbox(
+                    "Selecione o Mês:",
+                    LISTA_MESES,
+                    index=hoje.month - 1,
+                    key="sel_mes_financeiro"
+                )
+            
+            with col_filtro2:
+                anos_disponiveis = [str(hoje.year - 1), str(hoje.year), str(hoje.year + 1)]
+                ano_selecionado = st.selectbox(
+                    "Selecione o Ano:",
+                    anos_disponiveis,
+                    index=anos_disponiveis.index(str(hoje.year)),
+                    key="sel_ano_financeiro"
+                )
+            
+            mes_ref = mes_selecionado
+            ano_ref = ano_selecionado
+            
+            # Carregar dados financeiros com validação
             try:
                 recebimentos = supabase.table("financeiro_mensal").select("*").eq("escritorio_id", escritorio_id).eq("mes", mes_ref).eq("ano", ano_ref).execute().data or []
-            except Exception:
+                if not recebimentos:
+                    st.info(f"ℹ️ Nenhum recebimento encontrado para {mes_ref}/{ano_ref}")
+            except Exception as e:
+                st.error(f"❌ Erro ao carregar recebimentos: {e}")
                 recebimentos = []
             
             try:
                 despesas = supabase.table("contas_a_pagar").select("*").eq("escritorio_id", escritorio_id).eq("mes", mes_ref).eq("ano", ano_ref).execute().data or []
-            except Exception:
+                if not despesas:
+                    st.info(f"ℹ️ Nenhuma despesa encontrada para {mes_ref}/{ano_ref}")
+            except Exception as e:
+                st.error(f"❌ Erro ao carregar despesas: {e}")
                 despesas = []
             
             # Processar dados
@@ -2031,14 +2066,22 @@ def render_financeiro():
                 ano_ref = str(hoje.year)
                 clientes_ativos = [c for c in carregar_clientes() if c.get("status_cadastro") == "Ativo"]
 
+                # ===== DEBUG: Validar mês/ano e carregar recebimentos =====
                 try:
                     recebimentos = supabase.table("financeiro_mensal").select("*").eq("escritorio_id", escritorio_id).eq("mes", mes_ref).eq("ano", ano_ref).execute().data or []
-                except Exception:
+                    if not recebimentos:
+                        # Se não há dados, tenta carregar sem filtro de ano para debug
+                        recebimentos_debug = supabase.table("financeiro_mensal").select("*").eq("escritorio_id", escritorio_id).eq("mes", mes_ref).execute().data or []
+                        if recebimentos_debug:
+                            st.warning(f"⚠️ DEBUG: Encontrados {len(recebimentos_debug)} registros para {mes_ref}, mas nenhum para {ano_ref}. Verifique o campo 'ano' na tabela.")
+                except Exception as e:
+                    st.warning(f"⚠️ Erro ao carregar Contas a Receber: {e}")
                     recebimentos = []
 
                 try:
                     despesas = supabase.table("contas_a_pagar").select("*").eq("escritorio_id", escritorio_id).eq("mes", mes_ref).eq("ano", ano_ref).execute().data or []
-                except Exception:
+                except Exception as e:
+                    st.warning(f"⚠️ Erro ao carregar Contas a Pagar: {e}")
                     despesas = []
 
                 df_receber = pd.DataFrame(recebimentos)
