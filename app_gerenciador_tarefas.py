@@ -721,7 +721,7 @@ def obter_perfil_usuario(usuario_email):
         escritorio_id = garantir_escritorio_id()
         res = supabase.table("usuarios_clientes").select("*").eq("email", usuario_email).eq("escritorio_id", escritorio_id).execute()
         if res.data:
-            return res.data[0].get("grupo_acesso", "Cliente")
+            return res.data[0].get("perfil", "Cliente")
         return "Cliente"
     except Exception:
         return "Cliente"
@@ -1190,28 +1190,38 @@ def render_cadastrar_cliente():
             usuario_existente = mapa_usuarios_por_label.get(usuario_vinculo) if not criar_novo_usuario else None
 
             if criar_novo_usuario:
-                usuario_nome = st.text_input("Nome do usuário responsável", key="usuario_nome")
-                usuario_email = st.text_input("E-mail de Login", key="usuario_email")
-                usuario_senha = st.text_input("Senha de Acesso inicial", type="password", key="usuario_senha")
-                representante_id = st.text_input("ID do Representante", key="usuario_representante_id")
+                col_user_1, col_user_2 = st.columns(2)
+                with col_user_1:
+                    usuario_nome = st.text_input("Nome do usuário responsável", key="usuario_nome")
+                    usuario_senha = st.text_input("Senha de Acesso inicial", type="password", key="usuario_senha")
+                with col_user_2:
+                    usuario_email = st.text_input("E-mail de Login", key="usuario_email")
+                    representante_id = st.text_input("ID do Representante", key="usuario_representante_id")
             else:
                 st.success("Usuário existente selecionado. A nova empresa será vinculada a este cadastro.")
-                st.write(f"**Nome:** {str(usuario_existente.get('nome') or '-').strip()}")
-                st.write(f"**E-mail:** {str(usuario_existente.get('email') or '-').strip()}")
-                representante_id = st.text_input(
-                    "ID do Representante",
-                    value=str(usuario_existente.get("representante_id") or "").strip(),
-                    key="usuario_representante_id_existente"
-                )
+                col_exist_1, col_exist_2 = st.columns(2)
+                with col_exist_1:
+                    st.write(f"**Nome:** {str(usuario_existente.get('nome') or '-').strip()}")
+                    st.write(f"**E-mail:** {str(usuario_existente.get('email') or '-').strip()}")
+                with col_exist_2:
+                    representante_id = st.text_input(
+                        "ID do Representante",
+                        value=str(usuario_existente.get("representante_id") or "").strip(),
+                        key="usuario_representante_id_existente"
+                    )
                 usuario_nome = ""
                 usuario_email = ""
                 usuario_senha = ""
 
         with st.container(border=True):
             st.subheader("🏢 Detalhes da Nova Empresa")
-            nome = st.text_input("Razão Social / Nome Fantasia", key="empresa_nome")
-            email_empresa = st.text_input("E-mail institucional", key="empresa_email")
-            telefone = st.text_input("Telefone", key="empresa_telefone")
+            col_emp_1, col_emp_2 = st.columns(2)
+            with col_emp_1:
+                nome = st.text_input("Razão Social / Nome Fantasia", key="empresa_nome")
+                email_empresa = st.text_input("E-mail institucional", key="empresa_email")
+            with col_emp_2:
+                telefone = st.text_input("Telefone", key="empresa_telefone")
+                regime = st.selectbox("Regime Tributário", ["Simples Nacional", "Lucro Presumido", "Lucro Real"], key="empresa_regime")
 
             col1, col2 = st.columns(2)
             with col1:
@@ -1219,7 +1229,6 @@ def render_cadastrar_cliente():
             with col2:
                 ie = st.text_input("Inscrição Estadual (IE)", key="empresa_ie")
 
-            regime = st.selectbox("Regime Tributário", ["Simples Nacional", "Lucro Presumido", "Lucro Real"], key="empresa_regime")
             socios = st.text_area("Sócios", key="empresa_socios")
             tem_folha = st.checkbox("Possui folha de pagamento?", key="empresa_tem_folha")
 
@@ -1274,8 +1283,7 @@ def render_cadastrar_cliente():
                             "nome": usuario_nome,
                             "email": usuario_email,
                             "senha": usuario_senha,
-                            "perfil": "cliente",
-                            "grupo_acesso": "Cliente"
+                            "perfil": "cliente"
                         }).execute()
                         msg_usuario = "Novo usuário criado e vinculado"
                     else:
@@ -1588,52 +1596,7 @@ def render_base_clientes():
                 st.dataframe(df_exibir_login, use_container_width=True)
                 
                 st.markdown("---")
-                st.markdown("### Gerenciar Grupo de Acesso e Permissões")
-                
-                # Seleção de usuário para gerenciar permissões
-                usuario_selecionado = st.selectbox("Selecione usuário para gerenciar:", df_exibicao_login['email'].unique(), key="sel_usuario_perm")
-                
-                if usuario_selecionado:
-                    usuario_data = df_exibicao_login[df_exibicao_login['email'] == usuario_selecionado].iloc[0]
-                    user_id = usuario_data['id'] if 'id' in usuario_data else None
-                    
-                    # Controle de grupo de acesso
-                    grupo_atual = usuario_data.get('grupo_acesso', 'Funcionário')
-                    novo_grupo = st.radio("Grupo de Acesso:", ["Funcionário", "Gestão"], key=f"grupo_{user_id}")
-                    
-                    # Se Gestão, permite marcar permissões específicas
-                    if novo_grupo == "Funcionário":
-                        st.info("👤 Funcionário - Acesso restrito às funcionalidades básicas.")
-                        permissoes_marcadas = []
-                    else:
-                        st.success("👨‍💼 Gestão - Acesso completo às funcionalidades e relatórios financeiros.")
-                        st.markdown("**Permissões de Gestão:**")
-                        col_perm1, col_perm2, col_perm3 = st.columns(3)
-                        with col_perm1:
-                            perm_financeiro = st.checkbox("📊 Visualizar Financeiro", value=True, key=f"perm_fin_{user_id}")
-                        with col_perm2:
-                            perm_relatorios = st.checkbox("📈 Gerar Relatórios", value=True, key=f"perm_rel_{user_id}")
-                        with col_perm3:
-                            perm_usuarios = st.checkbox("👥 Gerenciar Usuários", value=False, key=f"perm_usu_{user_id}")
-                        
-                        permissoes_marcadas = []
-                        if perm_financeiro:
-                            permissoes_marcadas.append("financeiro")
-                        if perm_relatorios:
-                            permissoes_marcadas.append("relatorios")
-                        if perm_usuarios:
-                            permissoes_marcadas.append("usuarios")
-                    
-                    if st.button(f"Salvar Acesso para {usuario_selecionado}", key=f"btn_salvar_acesso_{user_id}"):
-                        try:
-                            if user_id:
-                                supabase.table('usuarios_clientes').update({
-                                    'grupo_acesso': novo_grupo
-                                }).eq('id', int(user_id)).eq('escritorio_id', escritorio_id).execute()
-                                st.success(f"Grupo de acesso atualizado para {novo_grupo}!")
-                                st.rerun()
-                        except Exception as e:
-                            st.error(f"Erro ao atualizar grupo: {e}")
+                st.info("Gestão de grupo de acesso removida desta tela para evitar conflitos de schema.")
                 
                 # Estatísticas
                 st.markdown("---")
@@ -2697,7 +2660,6 @@ def render_gestao_saas():
                         payload_admin = {
                             "nome": nome_admin,
                             "email": email_admin,
-                            "grupo_acesso": "Gestão",
                             "escritorio_id": escritorio_id,
                             "senha": senha_admin,
                             "perfil": "escritorio"
