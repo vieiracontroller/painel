@@ -998,6 +998,87 @@ def gerar_obrigacoes_mes(mes: str, ano: str):
     except Exception as e:
         return {"sucesso": False, "mensagem": f"Erro ao gerar obrigações: {e}", "inseridas": 0}
 
+
+def gerar_honorarios_mensais_automatico():
+    """
+    Função isolada para gerar automaticamente os honorários mensais dos clientes.
+    
+    Lógica:
+    1. Verifica no início de cada mês se já existe um lançamento de 'Mensalidade' 
+       para cada cliente ativo na tabela `clientes`.
+    2. Se não existir, insere automaticamente um registro na tabela `financeiro_mensal` 
+       com o valor do honorário definido no cadastro do cliente.
+    3. Garante segurança evitando duplicidade (UPSERT se possível).
+    
+    Returns:
+        dict: {"sucesso": bool, "mensagem": str, "inseridas": int}
+    """
+    try:
+        escritorio_id = garantir_escritorio_id()
+        hoje = datetime.now()
+        mes_atual = LISTA_MESES[hoje.month - 1]
+        ano_atual = str(hoje.year)
+        
+        # Carregar clientes ativos
+        clientes_ativos = supabase.table("clientes").select("*").eq("escritorio_id", escritorio_id).eq("status_cadastro", "Ativo").execute().data or []
+        
+        if not clientes_ativos:
+            return {"sucesso": False, "mensagem": "Nenhum cliente ativo encontrado.", "inseridas": 0}
+        
+        # Carregar lançamentos de "Mensalidade" já existentes para este mês/ano
+        mensalidades_existentes = supabase.table("financeiro_mensal").select("cliente_id").eq("escritorio_id", escritorio_id).eq("tipo", "Mensalidade").eq("mes", mes_atual).eq("ano", ano_atual).execute().data or []
+        clientes_com_mensalidade = {int(to_python_scalar(m.get("cliente_id"))) for m in mensalidades_existentes if m.get("cliente_id") is not None}
+        
+        inseridas = 0
+        novos_lancamentos = []
+        
+        # Para cada cliente ativo
+        for cliente in clientes_ativos:
+            cliente_id = cliente.get("id")
+            if cliente_id is None:
+                continue
+            
+            cliente_id_int = int(to_python_scalar(cliente_id))
+            
+            # Verificar se já existe mensalidade para este cliente neste mês
+            if cliente_id_int in clientes_com_mensalidade:
+                continue
+            
+            # Obter valor do honorário
+            valor_honorario = float(to_python_scalar(cliente.get("valor_honorario", 0) or 0))
+            if valor_honorario <= 0:
+                continue
+            
+            # Obter dia de vencimento
+            dia_vencimento = int(float(to_python_scalar(cliente.get("dia_vencimento", 10) or 10)))
+            data_venc = gerar_data_vencimento(ano_atual, mes_atual, dia_vencimento)
+            
+            # Preparar novo lançamento
+            novos_lancamentos.append({
+                "escritorio_id": escritorio_id,
+                "cliente_id": cliente_id_int,
+                "tipo": "Mensalidade",
+                "descricao": f"Honorários - {str(cliente.get('nome', '-')).strip() or '-'}",
+                "valor": valor_honorario,
+                "data_vencimento": data_venc,
+                "status": "Pendente",
+                "data_pagamento": None,
+                "mes": mes_atual,
+                "ano": ano_atual
+            })
+            inseridas += 1
+        
+        # Bulk insert dos novos lançamentos
+        if novos_lancamentos:
+            supabase.table("financeiro_mensal").insert(novos_lancamentos).execute()
+            # Sincronizar cache após inserção
+            sincronizar_cache_supabase()
+        
+        return {"sucesso": True, "mensagem": f"{inseridas} honorários mensais gerados com sucesso.", "inseridas": inseridas}
+    
+    except Exception as e:
+        return {"sucesso": False, "mensagem": f"Erro ao gerar honorários mensais: {e}", "inseridas": 0}
+
 # ============================================================================
 # MÓDULO: VISUALIZAÇÕES - DASHBOARD
 # ============================================================================
@@ -1846,6 +1927,12 @@ def render_financeiro():
                 if perfil_sessao not in {"admin", "escritorio"} and perfil_usuario != "Gestão":
                     st.error("❌ Erro: Acesso restrito aos perfis autorizados.")
                     return
+                
+                # ===== AUTOMAÇÃO: Gerar honorários mensais se não existirem =====
+                resultado_hon = gerar_honorarios_mensais_automatico()
+                if resultado_hon.get("inseridas", 0) > 0:
+                    st.info(f"✅ {resultado_hon.get('mensagem')}")
+
 
                 st.markdown("Módulo unificado com contas a receber e contas a pagar para o mês atual.")
 
@@ -1858,44 +1945,6 @@ def render_financeiro():
                     recebimentos = supabase.table("financeiro_mensal").select("*").eq("escritorio_id", escritorio_id).eq("mes", mes_ref).eq("ano", ano_ref).execute().data or []
                 except Exception:
                     recebimentos = []
-
-                # Integra honorarios recorrentes dos clientes ativos no mes atual.
-                try:
-                    clientes_mensalidade_ja_lancada = set()
-                    for rec in recebimentos:
-                        tipo_rec = str(rec.get("tipo") or "").strip().lower()
-                        cliente_ref = rec.get("cliente_id")
-                        if "mensalidade" in tipo_rec and cliente_ref is not None:
-                            clientes_mensalidade_ja_lancada.add(int(to_python_scalar(cliente_ref)))
-
-                    for cliente in clientes_ativos:
-                        cliente_id_ref = cliente.get("id")
-                        if cliente_id_ref is None:
-                            continue
-
-                        cliente_id_int = int(to_python_scalar(cliente_id_ref))
-                        if cliente_id_int in clientes_mensalidade_ja_lancada:
-                            continue
-
-                        valor_hon = float(to_python_scalar(cliente.get("valor_honorario", 0) or 0))
-                        if valor_hon <= 0:
-                            continue
-
-                        dia_venc_hon = int(float(to_python_scalar(cliente.get("dia_vencimento", 10) or 10)))
-                        recebimentos.append({
-                            "id": None,
-                            "cliente_id": cliente_id_int,
-                            "tipo": "Mensalidade",
-                            "descricao": f"Honorarios - {str(cliente.get('nome', '-')).strip() or '-'}",
-                            "valor": valor_hon,
-                            "data_vencimento": gerar_data_vencimento(ano_ref, mes_ref, dia_venc_hon),
-                            "status": "Pendente",
-                            "data_pagamento": None,
-                            "mes": mes_ref,
-                            "ano": ano_ref
-                        })
-                except Exception:
-                    pass
 
                 try:
                     despesas = supabase.table("contas_a_pagar").select("*").eq("escritorio_id", escritorio_id).eq("mes", mes_ref).eq("ano", ano_ref).execute().data or []
