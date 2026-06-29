@@ -1229,8 +1229,16 @@ def carregar_solicitacoes_servicos(escritorio_id: int, cliente_id: int | None = 
         if status:
             query = query.eq("status", str(status))
         return query.order("id", desc=True).execute().data or []
-    except Exception:
+    except Exception as e:
+        print(f"[SUPABASE][solicitacoes_servicos][select] {e}")
         return []
+
+
+def formatar_erro_supabase_tabela_coluna(tabela: str, colunas_tentadas: list[str], erro: Exception):
+    """Retorna mensagem amigável destacando tabela e colunas tentadas."""
+    msg = str(erro)
+    colunas_txt = ", ".join([c for c in colunas_tentadas if c]) or "(não identificado)"
+    return f"Tabela: {tabela} | Colunas tentadas: {colunas_txt} | Erro Supabase: {msg}"
 
 
 def carregar_catalogo_servicos(escritorio_id: int):
@@ -1240,25 +1248,25 @@ def carregar_catalogo_servicos(escritorio_id: int):
             supabase.table("catalogo_servicos")
             .select("*")
             .eq("escritorio_id", int(escritorio_id))
-            .order("nome_servico")
+            .order("servico")
             .execute()
             .data
             or []
         )
     except Exception as e:
-        print(f"[SUPABASE][catalogo_servicos][select_order_nome_servico] {e}")
+        print(f"[SUPABASE][catalogo_servicos][select_order_servico] {e}")
         try:
             return (
                 supabase.table("catalogo_servicos")
                 .select("*")
                 .eq("escritorio_id", int(escritorio_id))
-                .order("servico")
+                .order("nome_servico")
                 .execute()
                 .data
                 or []
             )
         except Exception as e2:
-            print(f"[SUPABASE][catalogo_servicos][select_order_servico] {e2}")
+            print(f"[SUPABASE][catalogo_servicos][select_order_nome_servico] {e2}")
             return []
 
 
@@ -1266,41 +1274,41 @@ def _normalizar_item_catalogo(item: dict):
     """Normaliza diferentes schemas possíveis do catálogo para uso consistente na UI."""
     return {
         "id": str(item.get("id") or "").strip(),
-        "nome_servico": str(item.get("nome_servico") or item.get("servico") or item.get("nome") or "").strip(),
-        "valor_padrao": float(to_python_scalar(item.get("valor_padrao") if item.get("valor_padrao") is not None else item.get("valor") or 0) or 0),
+        "servico": str(item.get("servico") or item.get("nome_servico") or item.get("nome") or "").strip(),
+        "valor_sugerido": float(to_python_scalar(item.get("valor_sugerido") if item.get("valor_sugerido") is not None else item.get("valor_padrao") if item.get("valor_padrao") is not None else item.get("valor") or 0) or 0),
         "inclusos": str(item.get("inclusos") or item.get("descricao_inclusos") or item.get("itens_inclusos") or "").strip(),
         "status": str(item.get("status") or "Ativo").strip() or "Ativo"
     }
 
 
-def salvar_item_catalogo_servico(escritorio_id: int, nome_servico: str, valor_padrao: float, inclusos: str = ""):
+def salvar_item_catalogo_servico(escritorio_id: int, servico: str, valor_sugerido: float, inclusos: str = ""):
     """Salva item no catálogo de serviços com fallback para variações de nome de coluna."""
     try:
         tentativas_payload = [
             {
                 "escritorio_id": int(escritorio_id),
-                "nome_servico": str(nome_servico).strip(),
-                "valor_padrao": float(to_python_scalar(valor_padrao or 0) or 0),
+                "servico": str(servico).strip(),
+                "valor_sugerido": float(to_python_scalar(valor_sugerido or 0) or 0),
                 "inclusos": str(inclusos or "").strip(),
                 "status": "Ativo"
             },
             {
                 "escritorio_id": int(escritorio_id),
-                "nome_servico": str(nome_servico).strip(),
-                "valor_padrao": float(to_python_scalar(valor_padrao or 0) or 0),
+                "servico": str(servico).strip(),
+                "valor_sugerido": float(to_python_scalar(valor_sugerido or 0) or 0),
                 "status": "Ativo"
             },
             {
                 "escritorio_id": int(escritorio_id),
-                "servico": str(nome_servico).strip(),
-                "valor": float(to_python_scalar(valor_padrao or 0) or 0),
+                "nome_servico": str(servico).strip(),
+                "valor_padrao": float(to_python_scalar(valor_sugerido or 0) or 0),
                 "inclusos": str(inclusos or "").strip(),
                 "status": "Ativo"
             },
             {
                 "escritorio_id": int(escritorio_id),
-                "servico": str(nome_servico).strip(),
-                "valor": float(to_python_scalar(valor_padrao or 0) or 0)
+                "nome_servico": str(servico).strip(),
+                "valor": float(to_python_scalar(valor_sugerido or 0) or 0)
             }
         ]
 
@@ -1315,10 +1323,17 @@ def salvar_item_catalogo_servico(escritorio_id: int, nome_servico: str, valor_pa
 
         raise ultimo_erro or RuntimeError("Falha ao inserir catálogo de serviços.")
     except Exception as e:
-        return {"sucesso": False, "mensagem": f"Falha ao salvar catálogo: {e}"}
+        return {
+            "sucesso": False,
+            "mensagem": formatar_erro_supabase_tabela_coluna(
+                "catalogo_servicos",
+                ["servico", "valor_sugerido", "inclusos", "status", "nome_servico", "valor_padrao"],
+                e,
+            ),
+        }
 
 
-def atualizar_item_catalogo_servico(escritorio_id: int, item_id: str, nome_servico: str, valor_padrao: float, inclusos: str, status_item: str):
+def atualizar_item_catalogo_servico(escritorio_id: int, item_id: str, servico: str, valor_sugerido: float, inclusos: str, status_item: str):
     """Atualiza item do catálogo com fallback para variações de colunas."""
     try:
         item_id_txt = str(item_id or "").strip()
@@ -1327,19 +1342,19 @@ def atualizar_item_catalogo_servico(escritorio_id: int, item_id: str, nome_servi
 
         tentativas_payload = [
             {
-                "nome_servico": str(nome_servico).strip(),
-                "valor_padrao": float(to_python_scalar(valor_padrao or 0) or 0),
+                "servico": str(servico).strip(),
+                "valor_sugerido": float(to_python_scalar(valor_sugerido or 0) or 0),
                 "inclusos": str(inclusos or "").strip(),
                 "status": str(status_item or "Ativo").strip() or "Ativo"
             },
             {
-                "nome_servico": str(nome_servico).strip(),
-                "valor_padrao": float(to_python_scalar(valor_padrao or 0) or 0),
+                "servico": str(servico).strip(),
+                "valor_sugerido": float(to_python_scalar(valor_sugerido or 0) or 0),
                 "status": str(status_item or "Ativo").strip() or "Ativo"
             },
             {
-                "servico": str(nome_servico).strip(),
-                "valor": float(to_python_scalar(valor_padrao or 0) or 0),
+                "nome_servico": str(servico).strip(),
+                "valor_padrao": float(to_python_scalar(valor_sugerido or 0) or 0),
                 "inclusos": str(inclusos or "").strip(),
                 "status": str(status_item or "Ativo").strip() or "Ativo"
             }
@@ -1356,7 +1371,14 @@ def atualizar_item_catalogo_servico(escritorio_id: int, item_id: str, nome_servi
 
         raise ultimo_erro or RuntimeError("Falha ao atualizar catálogo de serviços.")
     except Exception as e:
-        return {"sucesso": False, "mensagem": f"Falha ao atualizar catálogo: {e}"}
+        return {
+            "sucesso": False,
+            "mensagem": formatar_erro_supabase_tabela_coluna(
+                "catalogo_servicos",
+                ["servico", "valor_sugerido", "inclusos", "status", "nome_servico", "valor_padrao"],
+                e,
+            ),
+        }
 
 
 def criar_solicitacao_servico(
@@ -1472,23 +1494,40 @@ def processar_solicitacao_servico(
             ano_ref = str(hoje.year)
             descricao_base = str(solic.get("servico_selecionado") or solic.get("titulo") or solic.get("descricao") or "Serviço Extra").strip()
 
-            supabase.table("contas_a_receber").insert({
-                "escritorio_id": int(escritorio_id),
-                "cliente_id": int(to_python_scalar(cliente_id)),
-                "tipo": "Serviço Extra",
-                "descricao": f"Serviço Extra - {descricao_base}",
-                "valor": valor,
-                "data_vencimento": str(data_vencimento),
-                "status": "Pendente",
-                "data_pagamento": None,
-                "mes": mes_ref,
-                "ano": ano_ref,
-                "data_lancamento": datetime.now().strftime("%Y-%m-%d")
-            }).execute()
+            try:
+                supabase.table("contas_a_receber").insert({
+                    "escritorio_id": int(escritorio_id),
+                    "cliente_id": int(to_python_scalar(cliente_id)),
+                    "tipo": "Serviço Extra",
+                    "descricao": f"Serviço Extra - {descricao_base}",
+                    "valor": valor,
+                    "data_vencimento": str(data_vencimento),
+                    "status": "Pendente",
+                    "data_pagamento": None,
+                    "mes": mes_ref,
+                    "ano": ano_ref,
+                    "data_lancamento": datetime.now().strftime("%Y-%m-%d")
+                }).execute()
+            except Exception as e_contas:
+                return {
+                    "sucesso": False,
+                    "mensagem": formatar_erro_supabase_tabela_coluna(
+                        "contas_a_receber",
+                        ["escritorio_id", "cliente_id", "tipo", "descricao", "valor", "data_vencimento", "status", "data_pagamento", "mes", "ano", "data_lancamento"],
+                        e_contas,
+                    ),
+                }
 
         return {"sucesso": True, "mensagem": "Solicitação processada com sucesso."}
     except Exception as e:
-        return {"sucesso": False, "mensagem": f"Falha ao processar solicitação: {e}"}
+        return {
+            "sucesso": False,
+            "mensagem": formatar_erro_supabase_tabela_coluna(
+                "solicitacoes_servicos",
+                ["id", "escritorio_id", "status", "cobrar", "custo_zero", "valor_cobranca", "data_processamento", "processado_por"],
+                e,
+            ),
+        }
 
 
 def concluir_solicitacao_servico(
@@ -1538,7 +1577,14 @@ def concluir_solicitacao_servico(
 
         return {"sucesso": True, "mensagem": "Solicitação concluída com sucesso."}
     except Exception as e:
-        return {"sucesso": False, "mensagem": f"Falha ao concluir solicitação: {e}"}
+        return {
+            "sucesso": False,
+            "mensagem": formatar_erro_supabase_tabela_coluna(
+                "solicitacoes_servicos",
+                ["id", "escritorio_id", "status", "data_conclusao", "anexo_url"],
+                e,
+            ),
+        }
 
 # ============================================================================
 # MÓDULO: AUTOMAÇÃO DE OBRIGAÇÕES (NOVO CATÁLOGO MESTRE)
@@ -2655,7 +2701,7 @@ def render_financeiro():
                             st.success("✅ Serviço cadastrado no catálogo.")
                             st.rerun()
                         else:
-                            st.error(resultado_cat.get("mensagem", "Falha ao salvar catálogo."))
+                            st.error(resultado_cat.get("mensagem", "Tabela: catalogo_servicos | Colunas tentadas: servico, valor_sugerido | Falha ao salvar catálogo."))
 
             catalogo_atual = carregar_catalogo_servicos(int(escritorio_id))
             if catalogo_atual:
@@ -2673,8 +2719,8 @@ def render_financeiro():
                     falhas = []
                     for _, row in df_editavel.iterrows():
                         item_id = str(row.get("id") or "").strip()
-                        nome_item = str(row.get("nome_servico") or "").strip()
-                        valor_item = float(to_python_scalar(row.get("valor_padrao") or 0) or 0)
+                        nome_item = str(row.get("servico") or "").strip()
+                        valor_item = float(to_python_scalar(row.get("valor_sugerido") or 0) or 0)
                         inclusos_item = str(row.get("inclusos") or "").strip()
                         status_item = str(row.get("status") or "Ativo").strip() or "Ativo"
 
@@ -2694,7 +2740,7 @@ def render_financeiro():
                             r = salvar_item_catalogo_servico(int(escritorio_id), nome_item, valor_item, inclusos_item)
 
                         if not r.get("sucesso"):
-                            falhas.append(r.get("mensagem", "Falha ao salvar item do catálogo."))
+                            falhas.append(r.get("mensagem", "Tabela: catalogo_servicos | Colunas tentadas: servico, valor_sugerido | Falha ao salvar item do catálogo."))
 
                     if falhas:
                         st.error(" | ".join(falhas[:3]))
@@ -3067,7 +3113,7 @@ def render_financeiro():
                                             st.rerun()
                                         except Exception as e:
                                             msg_erro = str(e)
-                                            st.error(f"Erro ao baixar recebimento: {msg_erro}")
+                                            st.error(formatar_erro_supabase_tabela_coluna("contas_a_receber", ["id", "escritorio_id", "status", "data_pagamento", "cliente_id", "tipo", "descricao", "valor", "data_vencimento", "mes", "ano", "data_lancamento"], e))
                                             if "permission" in msg_erro.lower() or "rls" in msg_erro.lower() or "not allowed" in msg_erro.lower():
                                                 st.error("A política RLS da tabela financeira precisa permitir UPDATE para o role authenticated.")
                     else:
@@ -3105,7 +3151,7 @@ def render_financeiro():
                                         st.success("Recebimento reaberto com sucesso.")
                                         st.rerun()
                                     except Exception as e:
-                                        st.error(f"Erro ao reabrir recebimento: {e}")
+                                        st.error(formatar_erro_supabase_tabela_coluna("contas_a_receber", ["id", "escritorio_id", "status", "data_pagamento"], e))
                     else:
                         st.info("Nenhum recebimento pago para reabrir.")
 
@@ -3774,13 +3820,13 @@ def render_portal_cliente():
 
         catalogo_bruto = carregar_catalogo_servicos(int(escritorio_id))
         catalogo_cliente = [_normalizar_item_catalogo(item) for item in catalogo_bruto]
-        opcoes_catalogo = [str(item.get("nome_servico", "-")).strip() for item in catalogo_cliente if str(item.get("nome_servico", "")).strip()]
+        opcoes_catalogo = [str(item.get("servico", "-")).strip() for item in catalogo_cliente if str(item.get("servico", "")).strip()]
         opcoes_catalogo = opcoes_catalogo + ["Outro"]
 
         mapa_catalogo_por_nome = {
-            str(item.get("nome_servico", "")).strip(): item
+            str(item.get("servico", "")).strip(): item
             for item in catalogo_cliente
-            if str(item.get("nome_servico", "")).strip()
+            if str(item.get("servico", "")).strip()
         }
 
         with st.form("form_solicitar_servico_cliente"):
@@ -3793,7 +3839,7 @@ def render_portal_cliente():
                 titulo_solic = st.text_input("Título da solicitação", placeholder="Ex: Serviço personalizado")
             else:
                 item_cat = mapa_catalogo_por_nome.get(servico_sel, {})
-                valor_sugerido = float(to_python_scalar(item_cat.get("valor_padrao") or 0) or 0) if item_cat else 0.0
+                valor_sugerido = float(to_python_scalar(item_cat.get("valor_sugerido") or 0) or 0) if item_cat else 0.0
                 st.caption(f"Valor sugerido: R$ {valor_sugerido:,.2f}")
                 if str(item_cat.get("inclusos") or "").strip():
                     st.caption(f"Inclusos: {str(item_cat.get('inclusos')).strip()}")
@@ -3823,7 +3869,7 @@ def render_portal_cliente():
                         st.success("✅ Solicitação enviada com sucesso.")
                         st.rerun()
                     else:
-                        st.error(resultado_solic.get("mensagem", "Falha ao enviar solicitação."))
+                        st.error(resultado_solic.get("mensagem", "Tabela: solicitacoes_servicos | Colunas tentadas: cliente_id, servico_selecionado, descricao_manual, titulo, descricao, solicitante_email | Falha ao enviar solicitação."))
 
         st.markdown("---")
         st.markdown("### 📋 Minhas Solicitações")
