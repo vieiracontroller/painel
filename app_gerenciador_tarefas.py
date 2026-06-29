@@ -607,6 +607,18 @@ def salvar_cliente_com_transacao(
                 pass
         
         # ===== ETAPA 4: SINCRONIZAR CACHE =====
+        # Garantir lançamento de mensalidade em contas_a_receber ao cadastrar/atualizar honorário.
+        try:
+            sincronizar_honorario_em_contas_a_receber(
+                escritorio_id=int(escritorio_id),
+                cliente_id=int(cliente_id),
+                valor_honorario=float(valor_honorario),
+                dia_vencimento=int(dia_vencimento),
+                nome_cliente=str(nome)
+            )
+        except Exception:
+            pass
+
         sincronizar_cache_supabase()
         
         return True, msg_usuario, {"cliente_id": cliente_id, "nome": nome}
@@ -1019,6 +1031,185 @@ def gerar_data_vencimento(ano: str, mes: str, dia: int):
         return datetime(ano_int, mes_int, dia_ajustado).strftime("%Y-%m-%d")
     except Exception:
         return datetime.now().strftime("%Y-%m-%d")
+
+
+def sincronizar_honorario_em_contas_a_receber(
+    escritorio_id: int,
+    cliente_id: int,
+    valor_honorario: float,
+    dia_vencimento: int,
+    nome_cliente: str = ""
+):
+    """
+    Garante lançamento de Mensalidade em contas_a_receber quando não houver
+    Mensalidade equivalente em financeiro_mensal no mês vigente.
+    """
+    try:
+        valor = float(to_python_scalar(valor_honorario or 0) or 0)
+        if valor <= 0:
+            return {"sucesso": True, "inseriu": False, "mensagem": "Valor de honorário zerado."}
+
+        hoje = datetime.now()
+        mes_ref = LISTA_MESES[hoje.month - 1]
+        ano_ref = str(hoje.year)
+        data_venc = gerar_data_vencimento(ano_ref, mes_ref, int(dia_vencimento or 10))
+
+        # Regra solicitada: só lançar em contas_a_receber se não existir mensalidade no financeiro_mensal.
+        financeiro_mes = (
+            supabase.table("financeiro_mensal")
+            .select("id")
+            .eq("escritorio_id", escritorio_id)
+            .eq("cliente_id", int(cliente_id))
+            .eq("tipo", "Mensalidade")
+            .eq("mes", mes_ref)
+            .eq("ano", ano_ref)
+            .limit(1)
+            .execute()
+            .data
+            or []
+        )
+        if financeiro_mes:
+            return {"sucesso": True, "inseriu": False, "mensagem": "Mensalidade já existente em financeiro_mensal."}
+
+        # Evita duplicidade na própria contas_a_receber.
+        try:
+            receber_mes = (
+                supabase.table("contas_a_receber")
+                .select("id")
+                .eq("escritorio_id", escritorio_id)
+                .eq("cliente_id", int(cliente_id))
+                .eq("tipo", "Mensalidade")
+                .eq("mes", mes_ref)
+                .eq("ano", ano_ref)
+                .limit(1)
+                .execute()
+                .data
+                or []
+            )
+            if receber_mes:
+                return {"sucesso": True, "inseriu": False, "mensagem": "Mensalidade já existente em contas_a_receber."}
+        except Exception:
+            # Se a tabela não existir ou schema divergir, segue para tentativa de insert e captura abaixo.
+            pass
+
+        descricao = f"Honorários - {str(nome_cliente).strip() or 'Cliente'}"
+        supabase.table("contas_a_receber").insert({
+            "escritorio_id": int(escritorio_id),
+            "cliente_id": int(cliente_id),
+            "tipo": "Mensalidade",
+            "descricao": descricao,
+            "valor": valor,
+            "data_vencimento": data_venc,
+            "status": "Pendente",
+            "data_pagamento": None,
+            "mes": mes_ref,
+            "ano": ano_ref,
+            "data_lancamento": datetime.now().strftime("%Y-%m-%d")
+        }).execute()
+
+        return {"sucesso": True, "inseriu": True, "mensagem": "Mensalidade lançada em contas_a_receber."}
+    except Exception as e:
+        return {"sucesso": False, "inseriu": False, "mensagem": f"Falha ao sincronizar contas_a_receber: {e}"}
+
+
+def carregar_contas_receber_consolidadas(escritorio_id: int, mes_ref: str, ano_ref: str):
+    """
+    Consolida contas a receber a partir de:
+    - financeiro_mensal
+    - contas_a_receber
+    - honorários programados em clientes ativos ainda sem lançamento no mês
+    """
+    try:
+        financeiros = supabase.table("financeiro_mensal").select("*").eq("escritorio_id", escritorio_id).execute().data or []
+    except Exception:
+        financeiros = []
+
+    try:
+        contas_receber = supabase.table("contas_a_receber").select("*").eq("escritorio_id", escritorio_id).execute().data or []
+    except Exception:
+        contas_receber = []
+
+    financeiros_mes = [
+        r for r in financeiros
+        if str(r.get("mes", "")).strip() == str(mes_ref)
+        and str(r.get("ano", "")).strip() == str(ano_ref)
+    ]
+    receber_mes = [
+        r for r in contas_receber
+        if str(r.get("mes", "")).strip() == str(mes_ref)
+        and str(r.get("ano", "")).strip() == str(ano_ref)
+    ]
+
+    consolidadas = []
+    chaves = set()
+
+    def _chave_linha(item: dict):
+        return (
+            int(to_python_scalar(item.get("cliente_id") or 0) or 0),
+            str(item.get("tipo") or "").strip().lower(),
+            str(item.get("descricao") or "").strip().lower(),
+            str(item.get("mes") or "").strip(),
+            str(item.get("ano") or "").strip(),
+            round(float(to_python_scalar(item.get("valor") or 0) or 0), 2),
+        )
+
+    for item in financeiros_mes:
+        chave = _chave_linha(item)
+        if chave not in chaves:
+            chaves.add(chave)
+            consolidadas.append(item)
+
+    for item in receber_mes:
+        chave = _chave_linha(item)
+        if chave not in chaves:
+            chaves.add(chave)
+            consolidadas.append(item)
+
+    # Completa com honorários programados sem lançamento no mês (nem financeiro nem contas_a_receber).
+    try:
+        clientes_ativos = (
+            supabase.table("clientes")
+            .select("id,nome,valor_honorario,dia_vencimento,status_cadastro")
+            .eq("escritorio_id", escritorio_id)
+            .eq("status_cadastro", "Ativo")
+            .execute()
+            .data
+            or []
+        )
+    except Exception:
+        clientes_ativos = []
+
+    clientes_com_mensalidade = {
+        int(to_python_scalar(item.get("cliente_id") or 0) or 0)
+        for item in consolidadas
+        if str(item.get("tipo") or "").strip().lower() == "mensalidade"
+    }
+
+    for cli in clientes_ativos:
+        cli_id = int(to_python_scalar(cli.get("id") or 0) or 0)
+        if cli_id <= 0 or cli_id in clientes_com_mensalidade:
+            continue
+
+        valor_h = float(to_python_scalar(cli.get("valor_honorario") or 0) or 0)
+        if valor_h <= 0:
+            continue
+
+        dia_venc = int(float(to_python_scalar(cli.get("dia_vencimento") or 10) or 10))
+        consolidadas.append({
+            "escritorio_id": int(escritorio_id),
+            "cliente_id": cli_id,
+            "tipo": "Mensalidade",
+            "descricao": f"Honorários - {str(cli.get('nome', '-')).strip() or '-'}",
+            "valor": valor_h,
+            "data_vencimento": gerar_data_vencimento(str(ano_ref), str(mes_ref), dia_venc),
+            "status": "Pendente",
+            "data_pagamento": None,
+            "mes": str(mes_ref),
+            "ano": str(ano_ref),
+            "origem": "programado_cliente"
+        })
+
+    return consolidadas
 
 # ============================================================================
 # MÓDULO: AUTOMAÇÃO DE OBRIGAÇÕES (NOVO CATÁLOGO MESTRE)
@@ -2101,7 +2292,17 @@ def render_financeiro():
                                     'valor_honorario': float(valor_honorario),
                                     'dia_vencimento': int(dia_vencimento)
                                 }).eq('id', int(to_python_scalar(cliente_id_fin))).eq('escritorio_id', escritorio_id).execute()
+
+                                resultado_sync_receber = sincronizar_honorario_em_contas_a_receber(
+                                    escritorio_id=int(escritorio_id),
+                                    cliente_id=int(to_python_scalar(cliente_id_fin)),
+                                    valor_honorario=float(valor_honorario),
+                                    dia_vencimento=int(dia_vencimento),
+                                    nome_cliente=str(cliente_fin)
+                                )
                                 st.success("Dados financeiros salvos com sucesso!")
+                                if resultado_sync_receber.get("inseriu"):
+                                    st.info("✅ Mensalidade lançada automaticamente em contas_a_receber.")
                                 st.rerun()
                         except Exception:
                             st.info("Não foi possível salvar os dados financeiros no momento.")
@@ -2139,13 +2340,17 @@ def render_financeiro():
             mes_ref = mes_selecionado
             ano_ref = ano_selecionado
             
-            # Carregar dados financeiros do escritório inteiro e filtrar em memória
-            # para evitar divergência por tipo/formato de ano no banco (str vs int).
+            # Carregar contas a receber consolidadas do escritório:
+            # financeiro_mensal + contas_a_receber + honorários programados sem baixa.
             try:
-                recebimentos_all = supabase.table("financeiro_mensal").select("*").eq("escritorio_id", escritorio_id).execute().data or []
+                recebimentos = carregar_contas_receber_consolidadas(
+                    escritorio_id=int(escritorio_id),
+                    mes_ref=str(mes_ref),
+                    ano_ref=str(ano_ref)
+                )
             except Exception as e:
-                st.error(f"❌ Erro ao carregar recebimentos: {e}")
-                recebimentos_all = []
+                st.error(f"❌ Erro ao carregar recebimentos consolidados: {e}")
+                recebimentos = []
 
             try:
                 despesas_all = supabase.table("contas_a_pagar").select("*").eq("escritorio_id", escritorio_id).execute().data or []
@@ -2153,11 +2358,6 @@ def render_financeiro():
                 st.error(f"❌ Erro ao carregar despesas: {e}")
                 despesas_all = []
 
-            recebimentos = [
-                r for r in recebimentos_all
-                if str(r.get("mes", "")).strip() == str(mes_ref)
-                and str(r.get("ano", "")).strip() == str(ano_ref)
-            ]
             despesas = [
                 d for d in despesas_all
                 if str(d.get("mes", "")).strip() == str(mes_ref)
@@ -2274,16 +2474,19 @@ def render_financeiro():
 
                 # ===== DEBUG: Validar mês/ano e carregar recebimentos =====
                 try:
-                    recebimentos_all = supabase.table("financeiro_mensal").select("*").eq("escritorio_id", escritorio_id).execute().data or []
-                    recebimentos = [
-                        r for r in recebimentos_all
-                        if str(r.get("mes", "")).strip() == str(mes_ref)
-                        and str(r.get("ano", "")).strip() == str(ano_ref)
-                    ]
+                    recebimentos = carregar_contas_receber_consolidadas(
+                        escritorio_id=int(escritorio_id),
+                        mes_ref=str(mes_ref),
+                        ano_ref=str(ano_ref)
+                    )
                     if not recebimentos:
                         # Se não há dados, tenta carregar sem filtro de ano para debug
+                        try:
+                            recebimentos_debug_all = supabase.table("financeiro_mensal").select("*").eq("escritorio_id", escritorio_id).execute().data or []
+                        except Exception:
+                            recebimentos_debug_all = []
                         recebimentos_debug = [
-                            r for r in recebimentos_all
+                            r for r in recebimentos_debug_all
                             if str(r.get("mes", "")).strip() == str(mes_ref)
                         ]
                         if recebimentos_debug:
