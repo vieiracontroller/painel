@@ -2,6 +2,7 @@ import streamlit as st
 import pandas as pd
 import plotly.express as px
 import os
+import json
 from PIL import Image
 from datetime import datetime
 from calendar import monthrange
@@ -177,6 +178,8 @@ OBRIGACOES_PADRAO = [
     {"obrigacao": "Folha de Pagamento", "prazo": "Até o último dia útil do mês subsequente", "periodicidade": "Mensal"}
 ]
 
+EMPRESAS_TESTE = ["Empresa A", "Empresa B", "Empresa C"]
+
 # ============================================================================
 # CONTROLE DE SESSÃO / LOGIN
 # ============================================================================
@@ -189,6 +192,8 @@ if 'logado' not in st.session_state:
     st.session_state.usuario_logado_email = None
     st.session_state.escritorio_id = None
     st.session_state.is_admin_master = False
+    st.session_state.empresa_ids_permitidas = []
+    st.session_state.empresa_selecionada = None
 
 if 'usuario_logado_email' not in st.session_state:
     st.session_state.usuario_logado_email = None
@@ -198,6 +203,122 @@ if 'escritorio_id' not in st.session_state:
     st.session_state.escritorio_id = None
 if 'is_admin_master' not in st.session_state:
     st.session_state.is_admin_master = False
+if 'empresa_ids_permitidas' not in st.session_state:
+    st.session_state.empresa_ids_permitidas = []
+if 'empresa_selecionada' not in st.session_state:
+    st.session_state.empresa_selecionada = None
+
+
+def _normalizar_lista_empresas(valor_lista):
+    """Normaliza lista de empresas (ids) vinda do banco em formatos diversos."""
+    if valor_lista is None:
+        return []
+
+    itens = []
+    if isinstance(valor_lista, list):
+        itens = valor_lista
+    elif isinstance(valor_lista, str):
+        texto = valor_lista.strip()
+        if not texto:
+            itens = []
+        else:
+            try:
+                possivel_json = json.loads(texto)
+                if isinstance(possivel_json, list):
+                    itens = possivel_json
+                else:
+                    itens = [possivel_json]
+            except Exception:
+                itens = [parte.strip() for parte in texto.split(",") if parte.strip()]
+    else:
+        itens = [valor_lista]
+
+    ids = []
+    for item in itens:
+        try:
+            ids.append(int(to_python_scalar(item)))
+        except Exception:
+            continue
+
+    # Limita a 3 empresas por representante, conforme regra de negócio.
+    return list(dict.fromkeys(ids))[:3]
+
+
+def obter_empresa_selecionada_segura():
+    """Retorna a empresa selecionada validada contra a lista permitida do usuário."""
+    ids_permitidas = _normalizar_lista_empresas(st.session_state.get("empresa_ids_permitidas"))
+    selecionada = st.session_state.get("empresa_selecionada")
+    try:
+        selecionada = int(to_python_scalar(selecionada)) if selecionada is not None else None
+    except Exception:
+        selecionada = None
+
+    if not ids_permitidas:
+        return None
+    if selecionada not in ids_permitidas:
+        return ids_permitidas[0]
+    return selecionada
+
+
+def carregar_empresas_vinculadas_usuario():
+    """Carrega somente as empresas permitidas para o representante logado."""
+    escritorio_id = garantir_escritorio_id()
+    ids_permitidas = _normalizar_lista_empresas(st.session_state.get("empresa_ids_permitidas"))
+    if not ids_permitidas:
+        return []
+
+    empresas = []
+    for emp_id in ids_permitidas:
+        try:
+            res = (
+                supabase.table("clientes")
+                .select("id,nome,status_cadastro")
+                .eq("id", int(emp_id))
+                .eq("escritorio_id", escritorio_id)
+                .limit(1)
+                .execute()
+            )
+            if res.data:
+                empresas.append(res.data[0])
+        except Exception:
+            continue
+    return empresas
+
+
+def render_seletor_empresa_cliente():
+    """Exibe seletor de empresa para representante com acesso multiempresa."""
+    if str(st.session_state.get("perfil") or "").strip().lower() != "cliente":
+        return
+
+    empresas = carregar_empresas_vinculadas_usuario()
+    if not empresas:
+        st.error("Nenhuma empresa vinculada ao seu acesso foi encontrada.")
+        st.stop()
+
+    mapa_empresas = {int(to_python_scalar(emp["id"])): str(emp.get("nome") or f"Empresa {emp.get('id')}") for emp in empresas}
+    ids_opcoes = list(mapa_empresas.keys())
+
+    empresa_atual = obter_empresa_selecionada_segura()
+    if empresa_atual is None:
+        empresa_atual = ids_opcoes[0]
+        st.session_state.empresa_selecionada = empresa_atual
+        st.session_state.cliente_id_logado = empresa_atual
+
+    indice_padrao = ids_opcoes.index(empresa_atual) if empresa_atual in ids_opcoes else 0
+
+    st.markdown("### Empresa ativa")
+    nova_empresa = st.selectbox(
+        "Selecione a empresa para gerenciar:",
+        options=ids_opcoes,
+        index=indice_padrao,
+        format_func=lambda emp_id: mapa_empresas.get(emp_id, f"Empresa {emp_id}"),
+        key="seletor_empresa_cliente"
+    )
+
+    if int(nova_empresa) != int(empresa_atual):
+        st.session_state.empresa_selecionada = int(nova_empresa)
+        st.session_state.cliente_id_logado = int(nova_empresa)
+        st.rerun()
 
 
 def obter_nome_usuario_ativo() -> str:
@@ -329,10 +450,116 @@ def realizar_login(usuario, senha):
         st.session_state.perfil = "admin" if eh_admin else "escritorio"
         st.session_state.cliente_id_logado = None
         st.session_state.is_admin_master = eh_admin
+        st.session_state.empresa_ids_permitidas = []
+        st.session_state.empresa_selecionada = None
         st.success("Login realizado com sucesso!")
         st.rerun()
     else:
-        st.error("Usuário ou senha incorretos.")
+        usuario_cliente = None
+        escritorio_id_usuario = st.session_state.get("escritorio_id")
+
+        # Login de representante/cliente com suporte a múltiplas empresas.
+        for campo_busca in ("email", "usuario"):
+            try:
+                query = (
+                    supabase.table("usuarios_clientes")
+                    .select("*")
+                    .eq(campo_busca, usuario)
+                    .eq("senha", senha)
+                )
+                if escritorio_id_usuario is not None:
+                    query = query.eq("escritorio_id", escritorio_id_usuario)
+                res_cliente = query.limit(1).execute()
+                if res_cliente.data:
+                    usuario_cliente = res_cliente.data[0]
+                    break
+            except Exception:
+                continue
+
+        if usuario_cliente:
+            escritorio_id_cliente = usuario_cliente.get('escritorio_id') or 1
+            empresas_ids = _normalizar_lista_empresas(
+                usuario_cliente.get("empresa_ids") if usuario_cliente.get("empresa_ids") is not None else usuario_cliente.get("lista_empresas")
+            )
+
+            # Compatibilidade: quando lista_empresas vier com nomes, converte para ids dos clientes do escritorio.
+            if not empresas_ids:
+                lista_empresas_raw = usuario_cliente.get("lista_empresas")
+                nomes_empresas = []
+                if isinstance(lista_empresas_raw, list):
+                    nomes_empresas = [str(item).strip() for item in lista_empresas_raw if str(item).strip()]
+                elif isinstance(lista_empresas_raw, str) and lista_empresas_raw.strip():
+                    try:
+                        parsed = json.loads(lista_empresas_raw)
+                        if isinstance(parsed, list):
+                            nomes_empresas = [str(item).strip() for item in parsed if str(item).strip()]
+                        else:
+                            nomes_empresas = [str(parsed).strip()]
+                    except Exception:
+                        nomes_empresas = [parte.strip() for parte in lista_empresas_raw.split(",") if parte.strip()]
+
+                for nome_empresa in nomes_empresas[:3]:
+                    try:
+                        res_empresa = (
+                            supabase.table("clientes")
+                            .select("id")
+                            .eq("nome", nome_empresa)
+                            .eq("escritorio_id", escritorio_id_cliente)
+                            .limit(1)
+                            .execute()
+                        )
+                        if res_empresa.data:
+                            empresas_ids.append(int(to_python_scalar(res_empresa.data[0].get("id"))))
+                    except Exception:
+                        continue
+
+            if not empresas_ids:
+                cliente_legado_id = usuario_cliente.get("cliente_id") or usuario_cliente.get("id_cliente")
+                try:
+                    if cliente_legado_id is not None:
+                        empresas_ids = [int(to_python_scalar(cliente_legado_id))]
+                except Exception:
+                    empresas_ids = []
+
+            if not empresas_ids:
+                st.error("Seu usuário não possui empresas vinculadas. Contate o suporte.")
+                return
+
+            empresas_validas = []
+            for emp_id in empresas_ids:
+                try:
+                    valida = (
+                        supabase.table("clientes")
+                        .select("id")
+                        .eq("id", int(emp_id))
+                        .eq("escritorio_id", escritorio_id_cliente)
+                        .limit(1)
+                        .execute()
+                    )
+                    if valida.data:
+                        empresas_validas.append(int(emp_id))
+                except Exception:
+                    continue
+
+            empresas_validas = list(dict.fromkeys(empresas_validas))[:3]
+            if not empresas_validas:
+                st.error("Nenhuma empresa válida foi encontrada para este usuário.")
+                return
+
+            st.session_state['usuario_logado'] = usuario_cliente
+            st.session_state['usuario'] = str(usuario_cliente.get('nome') or usuario_cliente.get('usuario') or usuario).strip()
+            st.session_state['usuario_logado_email'] = str(usuario_cliente.get('email') or usuario).strip()
+            st.session_state['escritorio_id'] = escritorio_id_cliente
+            st.session_state.logado = True
+            st.session_state.perfil = "cliente"
+            st.session_state.empresa_ids_permitidas = empresas_validas
+            st.session_state.empresa_selecionada = empresas_validas[0]
+            st.session_state.cliente_id_logado = empresas_validas[0]
+            st.session_state.is_admin_master = False
+            st.success("Login realizado com sucesso!")
+            st.rerun()
+        else:
+            st.error("Usuário ou senha incorretos.")
 
 # ============================================================================
 # MÓDULO: FUNÇÕES DE CARREGAMENTO DE DADOS
@@ -373,7 +600,12 @@ def carregar_clientes():
 def carregar_tarefas():
     escritorio_id = garantir_escritorio_id()
     try:
-        res = supabase.table("tarefas").select("*").eq("escritorio_id", escritorio_id).execute()
+        query = supabase.table("tarefas").select("*").eq("escritorio_id", escritorio_id)
+        if str(st.session_state.get("perfil") or "").strip().lower() == "cliente":
+            empresa_id = obter_empresa_selecionada_segura()
+            if empresa_id is not None:
+                query = query.eq("cliente_id", int(empresa_id))
+        res = query.execute()
         return res.data or []
     except Exception as e:
         _avisar_falha_carregamento("tarefas", "as tarefas", e)
@@ -383,7 +615,12 @@ def carregar_tarefas():
 def carregar_documentos_fixos():
     escritorio_id = garantir_escritorio_id()
     try:
-        res = supabase.table("documentos_fixos").select("*, clientes(nome)").eq("escritorio_id", escritorio_id).execute()
+        query = supabase.table("documentos_fixos").select("*, clientes(nome)").eq("escritorio_id", escritorio_id)
+        if str(st.session_state.get("perfil") or "").strip().lower() == "cliente":
+            empresa_id = obter_empresa_selecionada_segura()
+            if empresa_id is not None:
+                query = query.eq("cliente_id", int(empresa_id))
+        res = query.execute()
         return res.data or []
     except Exception as e:
         _avisar_falha_carregamento("documentos_fixos", "os documentos fixos", e)
@@ -393,7 +630,12 @@ def carregar_documentos_fixos():
 def carregar_arquivos_escritorio():
     escritorio_id = garantir_escritorio_id()
     try:
-        res = supabase.table("arquivos_escritorio").select("*").eq("escritorio_id", escritorio_id).execute()
+        query = supabase.table("arquivos_escritorio").select("*").eq("escritorio_id", escritorio_id)
+        if str(st.session_state.get("perfil") or "").strip().lower() == "cliente":
+            empresa_id = obter_empresa_selecionada_segura()
+            if empresa_id is not None:
+                query = query.eq("cliente_id", int(empresa_id))
+        res = query.execute()
         return res.data or []
     except Exception as e:
         _avisar_falha_carregamento("arquivos_escritorio", "os arquivos do escritorio", e)
@@ -891,6 +1133,8 @@ def render_cadastrar_cliente():
         st.session_state["usuario_nome"] = ""
         st.session_state["usuario_email"] = ""
         st.session_state["usuario_senha"] = ""
+        st.session_state["usuario_representante_id"] = ""
+        st.session_state["usuario_lista_empresas"] = []
 
     with st.form("form_cadastro_cliente", clear_on_submit=True):
         st.subheader("Dados da Empresa")
@@ -922,6 +1166,12 @@ def render_cadastrar_cliente():
         usuario_nome = st.text_input("Nome do usuário responsável", key="usuario_nome")
         usuario_email = st.text_input("E-mail de Login", key="usuario_email")
         usuario_senha = st.text_input("Senha de Acesso inicial", type="password", key="usuario_senha")
+        representante_id = st.text_input("ID do Representante", key="usuario_representante_id")
+        lista_empresas = st.multiselect(
+            "Empresas vinculadas (teste)",
+            options=EMPRESAS_TESTE,
+            key="usuario_lista_empresas"
+        )
 
         if st.form_submit_button("Salvar Cadastro"):
             if not nome or not cnpj or not ie:
@@ -952,6 +1202,8 @@ def render_cadastrar_cliente():
                     supabase.table("usuarios_clientes").insert({
                         "escritorio_id": escritorio_id,
                         "cliente_id": cliente_id,
+                        "representante_id": representante_id if representante_id else None,
+                        "lista_empresas": lista_empresas if lista_empresas else [nome],
                         "email": usuario_email,
                         "senha": usuario_senha,
                         "perfil": "cliente",
@@ -961,6 +1213,8 @@ def render_cadastrar_cliente():
                     supabase.table("usuarios_clientes").insert({
                         "escritorio_id": escritorio_id,
                         "cliente_id": cliente_id,
+                        "representante_id": representante_id if representante_id else None,
+                        "lista_empresas": lista_empresas if lista_empresas else [nome],
                         "nome": usuario_nome,
                         "email": usuario_email,
                         "senha": usuario_senha,
@@ -1119,9 +1373,14 @@ def render_base_clientes():
                 df_ativos = df_final[df_final['status_cadastro'] == 'Ativo']
                 df_inativos = df_final[df_final['status_cadastro'] == 'Inativo']
 
-                display_cols = [c for c in ['id_empresa', 'nome', 'cnpj', 'regime', 'email_user', 'status_cadastro'] if c in df_final.columns]
+                display_cols = [c for c in ['id_empresa', 'nome', 'cnpj', 'regime', 'email_user', 'representante_id', 'lista_empresas', 'status_cadastro'] if c in df_final.columns]
                 if 'nome' not in display_cols and 'nome_empresa' in df_final.columns:
                     display_cols.insert(1, 'nome_empresa')
+
+                if 'lista_empresas' in df_final.columns:
+                    df_final['lista_empresas'] = df_final['lista_empresas'].apply(
+                        lambda itens: ", ".join(itens) if isinstance(itens, list) else str(itens or "-")
+                    )
 
                 st.subheader('🟢 Clientes Ativos')
                 st.dataframe(df_ativos[display_cols], use_container_width=True)
@@ -1853,7 +2112,15 @@ def render_financeiro_saas():
 
 def render_portal_cliente():
     escritorio_id = garantir_escritorio_id()
-    cli_res = supabase.table("clientes").select("*").eq("id", st.session_state.cliente_id_logado).eq("escritorio_id", escritorio_id).execute()
+    empresa_atual = obter_empresa_selecionada_segura()
+    if empresa_atual is None:
+        st.error("Nenhuma empresa válida selecionada para este acesso.")
+        return
+
+    st.session_state.empresa_selecionada = int(empresa_atual)
+    st.session_state.cliente_id_logado = int(empresa_atual)
+
+    cli_res = supabase.table("clientes").select("*").eq("id", int(empresa_atual)).eq("escritorio_id", escritorio_id).execute()
     if not cli_res.data:
         st.error("Cliente não encontrado.")
         return
@@ -1932,7 +2199,7 @@ def render_portal_cliente():
         tab_fixos_sub, tab_mensais_sub = st.tabs(["📄 Documentos Fixos", "📅 Guias Mensais"])
         
         with tab_fixos_sub:
-            docs_fixos = supabase.table("documentos_fixos").select("*").eq("cliente_id", cliente["id"]).eq("escritorio_id", escritorio_id).execute().data or []
+            docs_fixos = supabase.table("documentos_fixos").select("*").eq("cliente_id", int(empresa_atual)).eq("escritorio_id", escritorio_id).execute().data or []
             if docs_fixos:
                 df_fixos = pd.DataFrame(docs_fixos)
                 df_fixos_exib = df_fixos[["tipo_documento", "nome_arquivo"]].rename(columns={"tipo_documento": "Descrição", "nome_arquivo": "Arquivo"})
@@ -1954,7 +2221,7 @@ def render_portal_cliente():
             with col_b:
                 ano_filtrado = st.selectbox("Ano:", ["Todos"] + LISTA_ANOS, index=1)
 
-            query = supabase.table("arquivos_escritorio").select("*").eq("cliente_id", cliente["id"]).eq("escritorio_id", escritorio_id)
+            query = supabase.table("arquivos_escritorio").select("*").eq("cliente_id", int(empresa_atual)).eq("escritorio_id", escritorio_id)
             if mes_filtrado != "Todos":
                 query = query.eq("mes", mes_filtrado)
             if ano_filtrado != "Todos":
@@ -1990,7 +2257,7 @@ def render_portal_cliente():
         data_venc_mensalidade = gerar_data_vencimento(ano_atual, mes_atual, dia_vencimento)
 
         try:
-            financeiro_cliente = supabase.table("financeiro_mensal").select("*").eq("cliente_id", int(to_python_scalar(cliente["id"]))).eq("escritorio_id", escritorio_id).execute().data or []
+            financeiro_cliente = supabase.table("financeiro_mensal").select("*").eq("cliente_id", int(empresa_atual)).eq("escritorio_id", escritorio_id).execute().data or []
             df_financeiro = pd.DataFrame(financeiro_cliente)
 
             mensalidade_atual = None
@@ -2500,6 +2767,8 @@ else:
                 st.session_state.usuario_logado_email = None
                 st.session_state.escritorio_id = None
                 st.session_state.is_admin_master = False
+                st.session_state.empresa_ids_permitidas = []
+                st.session_state.empresa_selecionada = None
                 st.rerun()
 
         if escolha == "Dashboard Geral":
@@ -2521,6 +2790,7 @@ else:
         elif escolha == "Gestão SaaS":
             render_gestao_saas()
     else:
+        render_seletor_empresa_cliente()
         render_branding_sidebar()
         with st.sidebar:
             st.write("Conectado como: **CLIENTE**")
@@ -2550,4 +2820,6 @@ else:
             st.session_state.usuario_logado_email = None
             st.session_state.escritorio_id = None
             st.session_state.is_admin_master = False
+            st.session_state.empresa_ids_permitidas = []
+            st.session_state.empresa_selecionada = None
             st.rerun()
