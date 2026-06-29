@@ -124,6 +124,68 @@ except Exception as e:
     st.error(f"Erro real: {e}")
     st.stop()
 
+BUCKET_DOCS_MENSAIS = str(
+    st.secrets.get("supabase", {}).get("bucket_documentos_clientes", "documentos-clientes")
+).strip()
+BUCKET_DOCS_FIXOS = str(
+    st.secrets.get("supabase", {}).get("bucket_documentos_fixos", "documentos-fixos")
+).strip()
+
+
+def validar_bucket_storage(bucket_nome: str):
+    """Valida se um bucket existe e retorna (existe, nomes_encontrados, erro)."""
+    try:
+        buckets = supabase.storage.list_buckets() or []
+        nomes = []
+        for bucket in buckets:
+            if isinstance(bucket, dict):
+                nome = str(bucket.get("name") or "").strip()
+            else:
+                nome = str(getattr(bucket, "name", "") or "").strip()
+            if nome:
+                nomes.append(nome)
+        return bucket_nome in nomes, nomes, ""
+    except Exception as e:
+        return False, [], str(e)
+
+
+def upload_em_bucket(bucket_nome: str, caminho_storage: str, arquivo_bytes: bytes, content_type: str = "application/octet-stream"):
+    """Faz upload com validação de bucket e mensagem amigável para erro de policy/bucket."""
+    existe, nomes, erro = validar_bucket_storage(bucket_nome)
+    if not existe:
+        nomes_disp = ", ".join(nomes) if nomes else "nenhum bucket listado"
+        detalhe = f" Erro ao listar buckets: {erro}" if erro else ""
+        raise RuntimeError(
+            f"Bucket '{bucket_nome}' não encontrado no projeto Supabase. Buckets disponíveis: {nomes_disp}.{detalhe}"
+        )
+
+    try:
+        return supabase.storage.from_(bucket_nome).upload(
+            path=caminho_storage,
+            file=arquivo_bytes,
+            file_options={"content-type": content_type}
+        )
+    except Exception as e:
+        msg = str(e)
+        if "Bucket not found" in msg:
+            raise RuntimeError(
+                f"Bucket '{bucket_nome}' não encontrado. Confira o nome do bucket e os secrets do app."
+            )
+        raise RuntimeError(
+            f"Falha no upload para '{bucket_nome}'. Verifique as policies de INSERT/SELECT no Storage e permissões da chave Supabase. Detalhe: {msg}"
+        )
+
+
+def gerar_link_assinado(bucket_nome: str, caminho_storage: str, expira_em_segundos: int = 60):
+    """Gera URL assinada com erro amigável de policy."""
+    try:
+        assinatura = supabase.storage.from_(bucket_nome).create_signed_url(caminho_storage, expira_em_segundos)
+        return assinatura.get("signedUrl") if isinstance(assinatura, dict) else None
+    except Exception as e:
+        raise RuntimeError(
+            f"Não foi possível gerar link no bucket '{bucket_nome}'. Verifique policy de leitura (SELECT) e chave de acesso. Detalhe: {e}"
+        )
+
 # ============================================================================
 # CONFIGURAÇÕES DE ENUMERADORES
 # ============================================================================
@@ -340,11 +402,36 @@ def escritorio_id_logado():
     return st.session_state.get("escritorio_id")
 
 
+def escritorio_esta_ativo(escritorio_id):
+    """Valida se o escritório está ativo no cadastro SaaS."""
+    try:
+        res = (
+            supabase.table("escritorios")
+            .select("id,status")
+            .eq("id", escritorio_id)
+            .limit(1)
+            .execute()
+        )
+        if not res.data:
+            return False
+        status = str(res.data[0].get("status") or "Ativo").strip().lower()
+        return status == "ativo"
+    except Exception:
+        return False
+
+
 def garantir_escritorio_id():
     escritorio_id = escritorio_id_logado()
     if escritorio_id is None:
         st.error("Sessao invalida: escritorio_id nao encontrado. Faça login novamente.")
         st.stop()
+
+    perfil_sessao = str(st.session_state.get("perfil", "")).strip().lower()
+    if perfil_sessao not in {"admin", "master"} and not escritorio_esta_ativo(escritorio_id):
+        st.error("Acesso bloqueado: este escritório está inativo. Contate o administrador master.")
+        st.session_state.logado = False
+        st.stop()
+
     return escritorio_id
 
 
@@ -612,10 +699,16 @@ def realizar_login(usuario, senha):
     if usuario_dados:
         perfil_banco = str(usuario_dados.get('perfil') or '').strip().lower()
         eh_admin = perfil_banco in {"admin", "master"} or str(usuario_dados.get('email') or '').strip().lower() == ADMIN_MASTER_EMAIL
+        escritorio_usuario = usuario_dados.get('escritorio_id') or usuario_dados.get('id_escritorio') or 1
+
+        if not eh_admin and not escritorio_esta_ativo(escritorio_usuario):
+            st.error("Login bloqueado: o escritório deste usuário está inativo no plano SaaS.")
+            return
+
         st.session_state['usuario_logado'] = usuario_dados
         st.session_state['usuario'] = str(usuario_dados.get('nome') or usuario_dados.get('usuario') or usuario).strip()
         st.session_state['usuario_logado_email'] = str(usuario_dados.get('email') or usuario_dados.get('usuario') or usuario).strip()
-        st.session_state['escritorio_id'] = usuario_dados.get('escritorio_id') or usuario_dados.get('id_escritorio') or 1
+        st.session_state['escritorio_id'] = escritorio_usuario
         st.session_state.logado = True
         st.session_state.perfil = "admin" if eh_admin else "escritorio"
         st.session_state.cliente_id_logado = None
@@ -648,6 +741,9 @@ def realizar_login(usuario, senha):
 
         if usuario_cliente:
             escritorio_id_cliente = usuario_cliente.get('escritorio_id') or 1
+            if not escritorio_esta_ativo(escritorio_id_cliente):
+                st.error("Login bloqueado: este escritório está inativo no hub.")
+                return
             empresas_ids = _normalizar_lista_empresas(
                 usuario_cliente.get("empresa_ids") if usuario_cliente.get("empresa_ids") is not None else usuario_cliente.get("lista_empresas")
             )
@@ -1255,8 +1351,8 @@ def render_dashboard():
 
     st.markdown("---")
     st.markdown("### Últimas tarefas cadastradas")
-    if not df_tarefas.empty and not df_clientes.empty:
-        df_exibicao = df_tarefas.merge(df_clientes[["id", "nome"]], left_on="cliente_id", right_on="id", how="left", suffixes=("", "_cliente"))
+    if not df_filtered.empty and not df_clientes.empty:
+        df_exibicao = df_filtered.merge(df_clientes[["id", "nome"]], left_on="cliente_id", right_on="id", how="left", suffixes=("", "_cliente"))
         
         # ===== SELEÇÃO RESILIENTE DE COLUNAS =====
         colunas_esperadas = ["id", "nome", "obrigacao", "periodicidade", "mes", "ano", "vencimento", "status"]
@@ -1270,7 +1366,7 @@ def render_dashboard():
         else:
             st.warning("⚠️ Colunas esperadas não encontradas. Verifique a estrutura das tarefas no banco.")
 
-        tarefas_pendentes = df_tarefas[df_tarefas["status"] == "Pendente"]
+        tarefas_pendentes = df_filtered[df_filtered["status"] == "Pendente"]
         if not tarefas_pendentes.empty:
             tarefas_pendentes = tarefas_pendentes.merge(
                 df_clientes[["id", "nome"]],
@@ -1319,7 +1415,7 @@ def render_dashboard():
         
         # ===== REABERTURA DE OBRIGAÇÕES CONCLUÍDAS =====
         st.markdown("---")
-        tarefas_concluidas = df_tarefas[df_tarefas["status"] == "Concluído"]
+        tarefas_concluidas = df_filtered[df_filtered["status"] == "Concluído"]
         if not tarefas_concluidas.empty:
             tarefas_concluidas = tarefas_concluidas.merge(
                 df_clientes[["id", "nome"]],
@@ -1364,7 +1460,7 @@ def render_dashboard():
         else:
             st.info("Não há tarefas concluídas para reabrir no momento.")
     else:
-        st.info("Cadastre um cliente e suas obrigações para começar a preencher o painel.")
+        st.info("Nenhuma obrigação encontrada para os filtros selecionados.")
 
 # ============================================================================
 # MÓDULO: VISUALIZAÇÕES - DOCUMENTOS
@@ -1374,6 +1470,19 @@ def render_upload_documentos():
     escritorio_id = garantir_escritorio_id()
     st.subheader("📤 Enviar Documentos para Clientes")
     st.markdown("Use este formulário para enviar arquivos mensais e fixos diretamente para os clientes.")
+
+    with st.expander("🧪 Diagnóstico de Storage", expanded=False):
+        mensal_ok, buckets_disp, erro_bucket = validar_bucket_storage(BUCKET_DOCS_MENSAIS)
+        fixo_ok, _, _ = validar_bucket_storage(BUCKET_DOCS_FIXOS)
+        st.write(f"Bucket mensal configurado: {BUCKET_DOCS_MENSAIS}")
+        st.write(f"Bucket fixo configurado: {BUCKET_DOCS_FIXOS}")
+        st.write(f"Buckets detectados no Supabase: {', '.join(buckets_disp) if buckets_disp else 'nenhum detectado'}")
+        if mensal_ok and fixo_ok:
+            st.success("Buckets configurados e acessíveis para o app.")
+        else:
+            st.error("Bucket ausente ou sem acesso. Verifique nome do bucket e policies de Storage (INSERT/SELECT).")
+            if erro_bucket:
+                st.caption(f"Detalhe técnico: {erro_bucket}")
 
     clientes = carregar_clientes()
     if not clientes:
@@ -1400,10 +1509,11 @@ def render_upload_documentos():
                 try:
                     nome_limpo = f"{id_cliente}_{ano_comp}_{mes_comp}_{int(datetime.now().timestamp())}_{arquivo_upload.name}"
                     caminho_storage = f"guias/{nome_limpo}"
-                    supabase.storage.from_("documentos-clientes").upload(
-                        path=caminho_storage,
-                        file=arquivo_upload.getvalue(),
-                        file_options={"content-type": arquivo_upload.type}
+                    upload_em_bucket(
+                        bucket_nome=BUCKET_DOCS_MENSAIS,
+                        caminho_storage=caminho_storage,
+                        arquivo_bytes=arquivo_upload.getvalue(),
+                        content_type=arquivo_upload.type or "application/octet-stream"
                     )
                     supabase.table("arquivos_escritorio").insert({
                         "escritorio_id": escritorio_id,
@@ -1435,10 +1545,11 @@ def render_upload_documentos():
                 try:
                     nome_limpo = f"{id_cliente}_{int(datetime.now().timestamp())}_{arquivo_upload.name}"
                     caminho_storage = f"documentos/{nome_limpo}"
-                    supabase.storage.from_("documentos-fixos").upload(
-                        path=caminho_storage,
-                        file=arquivo_upload.getvalue(),
-                        file_options={"content-type": arquivo_upload.type}
+                    upload_em_bucket(
+                        bucket_nome=BUCKET_DOCS_FIXOS,
+                        caminho_storage=caminho_storage,
+                        arquivo_bytes=arquivo_upload.getvalue(),
+                        content_type=arquivo_upload.type or "application/octet-stream"
                     )
                     supabase.table("documentos_fixos").insert({
                         "escritorio_id": escritorio_id,
@@ -2133,6 +2244,13 @@ def render_financeiro():
                 ano_ref = str(hoje.year)
                 clientes_ativos = [c for c in carregar_clientes() if c.get("status_cadastro") == "Ativo"]
 
+                clientes_filtro_det = ["Todos os Clientes"] + [c.get("nome", "-") for c in clientes_ativos]
+                cliente_selecionado_det = st.selectbox(
+                    "Filtrar por Cliente (detalhes):",
+                    clientes_filtro_det,
+                    key="filtro_cliente_financeiro_detalhes"
+                )
+
                 # ===== DEBUG: Validar mês/ano e carregar recebimentos =====
                 try:
                     recebimentos = supabase.table("financeiro_mensal").select("*").eq("escritorio_id", escritorio_id).eq("mes", mes_ref).eq("ano", ano_ref).execute().data or []
@@ -2150,6 +2268,13 @@ def render_financeiro():
                 except Exception as e:
                     st.warning(f"⚠️ Erro ao carregar Contas a Pagar: {e}")
                     despesas = []
+
+                if cliente_selecionado_det != "Todos os Clientes":
+                    cliente_obj_det = next((c for c in clientes_ativos if c.get("nome") == cliente_selecionado_det), None)
+                    if cliente_obj_det:
+                        cliente_id_det = cliente_obj_det.get("id")
+                        recebimentos = [r for r in recebimentos if r.get("cliente_id") == cliente_id_det]
+                        despesas = [d for d in despesas if d.get("cliente_id") == cliente_id_det]
 
                 df_receber = pd.DataFrame(recebimentos)
                 if not df_receber.empty:
@@ -2223,7 +2348,7 @@ def render_financeiro():
                         st.info("Nenhum lançamento encontrado em contas a receber para o mês atual.")
 
                     st.markdown("---")
-                    st.markdown("### � Reabertura de Recebimentos")
+                    st.markdown("### 🔄 Reabertura de Recebimentos")
                     recebimentos_pagos = df_receber[df_receber["status"] == "Pago"].copy()
                     if not recebimentos_pagos.empty:
                         st.markdown("Clique no botão para reabrir um recebimento baixado indevidamente:")
@@ -2243,7 +2368,7 @@ def render_financeiro():
                                             "status": "Pendente",
                                             "data_pagamento": None
                                         }).eq("id", int(row_id)).eq("escritorio_id", escritorio_id).execute()
-                                        st.success("Recebimento reabert com sucesso.")
+                                        st.success("Recebimento reaberto com sucesso.")
                                         st.rerun()
                                     except Exception:
                                         st.info("Não foi possível reabrir o recebimento neste momento.")
@@ -2385,7 +2510,7 @@ def render_financeiro():
                                             "status": "Pendente",
                                             "data_pagamento": None
                                         }).eq("id", int(desp_id)).eq("escritorio_id", escritorio_id).execute()
-                                        st.success("Despesa reabert com sucesso.")
+                                        st.success("Despesa reaberta com sucesso.")
                                         st.rerun()
                                     except Exception:
                                         st.info("Não foi possível reabrir a despesa neste momento.")
@@ -2721,8 +2846,10 @@ def render_portal_cliente():
                 st.markdown("---")
                 for doc in docs_fixos:
                     try:
-                        assinatura = supabase.storage.from_("documentos-fixos").create_signed_url(doc["caminho_storage"], 60)
-                        st.markdown(f"- **{doc['tipo_documento']}** — {doc['nome_arquivo']} — <a href=\"{assinatura['signedUrl']}\" target=\"_blank\">Abrir / Baixar</a>", unsafe_allow_html=True)
+                        url_assinada = gerar_link_assinado(BUCKET_DOCS_FIXOS, doc["caminho_storage"], 60)
+                        if not url_assinada:
+                            raise RuntimeError("URL assinada vazia")
+                        st.markdown(f"- **{doc['tipo_documento']}** — {doc['nome_arquivo']} — <a href=\"{url_assinada}\" target=\"_blank\">Abrir / Baixar</a>", unsafe_allow_html=True)
                     except Exception:
                         st.markdown(f"- **{doc['tipo_documento']}** — {doc['nome_arquivo']} — Erro ao gerar link")
             else:
@@ -2759,8 +2886,10 @@ def render_portal_cliente():
                 st.markdown("---")
                 for arq in arquivos:
                     try:
-                        assinatura = supabase.storage.from_("documentos-clientes").create_signed_url(arq["caminho_storage"], 60)
-                        st.markdown(f"- **{arq['nome_arquivo']}** ({arq['mes']}/{arq['ano']}) — <a href=\"{assinatura['signedUrl']}\" target=\"_blank\">Baixar</a>", unsafe_allow_html=True)
+                        url_assinada = gerar_link_assinado(BUCKET_DOCS_MENSAIS, arq["caminho_storage"], 60)
+                        if not url_assinada:
+                            raise RuntimeError("URL assinada vazia")
+                        st.markdown(f"- **{arq['nome_arquivo']}** ({arq['mes']}/{arq['ano']}) — <a href=\"{url_assinada}\" target=\"_blank\">Baixar</a>", unsafe_allow_html=True)
                     except Exception:
                         st.markdown(f"- **{arq['nome_arquivo']}** ({arq['mes']}/{arq['ano']}) — Erro ao gerar link")
             else:
