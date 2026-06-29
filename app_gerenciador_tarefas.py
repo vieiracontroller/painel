@@ -131,7 +131,7 @@ BUCKET_DOCS_FIXOS = str(
     st.secrets.get("supabase", {}).get("bucket_documentos_fixos", "documentos-fixos")
 ).strip()
 BUCKET_SERVICOS_EXTRAS = str(
-    st.secrets.get("supabase", {}).get("bucket_servicos_extras", BUCKET_DOCS_MENSAIS)
+    st.secrets.get("supabase", {}).get("bucket_servicos_extras", "anexos-servicos")
 ).strip()
 
 
@@ -1280,6 +1280,7 @@ def criar_solicitacao_servico(
     titulo: str,
     descricao: str,
     prioridade: str,
+    solicitante_email: str = "",
 ):
     """Cria uma solicitação do portal do cliente para fila administrativa."""
     try:
@@ -1291,6 +1292,7 @@ def criar_solicitacao_servico(
             "titulo": str(titulo).strip(),
             "descricao": str(descricao).strip(),
             "prioridade": str(prioridade).strip() or "Normal",
+            "solicitante_email": str(solicitante_email).strip(),
             "status": "Pendente",
             "data_solicitacao": datetime.now().isoformat()
         }
@@ -1357,7 +1359,7 @@ def processar_solicitacao_servico(
             hoje = datetime.now()
             mes_ref = LISTA_MESES[hoje.month - 1]
             ano_ref = str(hoje.year)
-            descricao_base = str(solic.get("servico_selecionado") or solic.get("servico_nome") or solic.get("titulo") or solic.get("descricao") or "Serviço Extra").strip()
+            descricao_base = str(solic.get("servico_selecionado") or solic.get("titulo") or solic.get("descricao") or "Serviço Extra").strip()
 
             supabase.table("contas_a_receber").insert({
                 "escritorio_id": int(escritorio_id),
@@ -1403,7 +1405,7 @@ def concluir_solicitacao_servico(
             "status": "Concluído",
             "data_conclusao": datetime.now().isoformat(),
             "concluido_por": str(concluido_por).strip(),
-            "anexo_resultado": caminho_anexo
+            "anexo_url": caminho_anexo
         }
         try:
             supabase.table("solicitacoes_servicos").update(payload_full).eq("id", int(solicitacao_id)).eq("escritorio_id", int(escritorio_id)).execute()
@@ -2559,7 +2561,7 @@ def render_financeiro():
                         sid = int(to_python_scalar(item.get("id") or 0) or 0)
                         cid = int(to_python_scalar(item.get("cliente_id") or 0) or 0)
                         cliente_nome = clientes_map.get(cid, f"Cliente ID {cid}")
-                        servico_nome = str(item.get("servico_selecionado") or item.get("servico_nome") or item.get("titulo") or item.get("descricao") or "Solicitação").strip()
+                        servico_nome = str(item.get("servico_selecionado") or item.get("titulo") or item.get("descricao") or "Solicitação").strip()
                         label = f"#{sid} | {cliente_nome} | {servico_nome}"
                         opcoes.append(label)
                         mapa_solic[label] = item
@@ -3333,7 +3335,7 @@ def render_servicos_extras_solicitados_admin():
         sid = int(to_python_scalar(item.get("id") or 0) or 0)
         cid = int(to_python_scalar(item.get("cliente_id") or 0) or 0)
         cliente_nome = mapa_clientes.get(cid, f"Cliente ID {cid}")
-        servico_nome = str(item.get("servico_selecionado") or item.get("servico_nome") or item.get("titulo") or "Solicitação").strip()
+        servico_nome = str(item.get("servico_selecionado") or item.get("titulo") or "Solicitação").strip()
         status_atual = str(item.get("status") or "Pendente").strip()
         data_sol = str(item.get("data_solicitacao") or "-")
         data_conc = str(item.get("data_conclusao") or "-")
@@ -3638,6 +3640,7 @@ def render_portal_cliente():
                         titulo=titulo_solic,
                         descricao=descricao_solic,
                         prioridade=prioridade_solic,
+                        solicitante_email=str(st.session_state.get("usuario_logado_email", "")),
                     )
                     if resultado_solic.get("sucesso"):
                         st.success("✅ Solicitação enviada com sucesso.")
@@ -3660,14 +3663,14 @@ def render_portal_cliente():
             for item in solicitacoes_cliente:
                 if str(item.get("status") or "").strip().lower() != "concluído":
                     continue
-                caminho_anexo = str(item.get("anexo_resultado") or "").strip()
+                caminho_anexo = str(item.get("anexo_url") or "").strip()
                 if not caminho_anexo:
                     continue
                 try:
                     url_assinada = gerar_link_assinado(BUCKET_SERVICOS_EXTRAS, caminho_anexo, 120)
                     if not url_assinada:
                         raise RuntimeError("URL assinada vazia")
-                    titulo = str(item.get("servico_selecionado") or item.get("servico_nome") or item.get("titulo") or f"Solicitação #{item.get('id')}").strip()
+                    titulo = str(item.get("servico_selecionado") or item.get("titulo") or f"Solicitação #{item.get('id')}").strip()
                     data_conc = str(item.get("data_conclusao") or "-")
                     st.markdown(f"- {titulo} | Concluído em: {data_conc} | <a href=\"{url_assinada}\" target=\"_blank\">Baixar anexo</a>", unsafe_allow_html=True)
                 except Exception:
