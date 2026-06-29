@@ -1248,134 +1248,73 @@ def carregar_catalogo_servicos(escritorio_id: int):
             supabase.table("catalogo_servicos")
             .select("*")
             .eq("escritorio_id", int(escritorio_id))
-            .order("servico")
+            .order("nome_servico")
             .execute()
             .data
             or []
         )
     except Exception as e:
-        print(f"[SUPABASE][catalogo_servicos][select_order_servico] {e}")
-        try:
-            return (
-                supabase.table("catalogo_servicos")
-                .select("*")
-                .eq("escritorio_id", int(escritorio_id))
-                .order("nome_servico")
-                .execute()
-                .data
-                or []
-            )
-        except Exception as e2:
-            print(f"[SUPABASE][catalogo_servicos][select_order_nome_servico] {e2}")
-            return []
+        print(f"[SUPABASE][catalogo_servicos][select_order_nome_servico] {e}")
+        return []
 
 
 def _normalizar_item_catalogo(item: dict):
     """Normaliza diferentes schemas possíveis do catálogo para uso consistente na UI."""
     return {
         "id": str(item.get("id") or "").strip(),
-        "servico": str(item.get("servico") or item.get("nome_servico") or item.get("nome") or "").strip(),
-        "valor_sugerido": float(to_python_scalar(item.get("valor_sugerido") if item.get("valor_sugerido") is not None else item.get("valor_padrao") if item.get("valor_padrao") is not None else item.get("valor") or 0) or 0),
+        "nome_servico": str(item.get("nome_servico") or "").strip(),
+        "valor_padrao": float(to_python_scalar(item.get("valor_padrao") or 0) or 0),
         "inclusos": str(item.get("inclusos") or item.get("descricao_inclusos") or item.get("itens_inclusos") or "").strip(),
         "status": str(item.get("status") or "Ativo").strip() or "Ativo"
     }
 
 
-def salvar_item_catalogo_servico(escritorio_id: int, servico: str, valor_sugerido: float, inclusos: str = ""):
-    """Salva item no catálogo de serviços com fallback para variações de nome de coluna."""
+def salvar_item_catalogo_servico(escritorio_id: int, nome_servico: str, valor_padrao: float, inclusos: str = ""):
+    """Salva item no catálogo de serviços."""
     try:
-        tentativas_payload = [
-            {
-                "escritorio_id": int(escritorio_id),
-                "servico": str(servico).strip(),
-                "valor_sugerido": float(to_python_scalar(valor_sugerido or 0) or 0),
-                "inclusos": str(inclusos or "").strip(),
-                "status": "Ativo"
-            },
-            {
-                "escritorio_id": int(escritorio_id),
-                "servico": str(servico).strip(),
-                "valor_sugerido": float(to_python_scalar(valor_sugerido or 0) or 0),
-                "status": "Ativo"
-            },
-            {
-                "escritorio_id": int(escritorio_id),
-                "nome_servico": str(servico).strip(),
-                "valor_padrao": float(to_python_scalar(valor_sugerido or 0) or 0),
-                "inclusos": str(inclusos or "").strip(),
-                "status": "Ativo"
-            },
-            {
-                "escritorio_id": int(escritorio_id),
-                "nome_servico": str(servico).strip(),
-                "valor": float(to_python_scalar(valor_sugerido or 0) or 0)
-            }
-        ]
-
-        ultimo_erro = None
-        for payload in tentativas_payload:
-            try:
-                supabase.table("catalogo_servicos").insert(payload).execute()
-                return {"sucesso": True, "mensagem": "Serviço cadastrado no catálogo."}
-            except Exception as e:
-                ultimo_erro = e
-                print(f"[SUPABASE][catalogo_servicos][insert] payload={payload} erro={e}")
-
-        raise ultimo_erro or RuntimeError("Falha ao inserir catálogo de serviços.")
+        payload = {
+            "escritorio_id": int(escritorio_id),
+            "nome_servico": str(nome_servico).strip(),
+            "valor_padrao": float(to_python_scalar(valor_padrao or 0) or 0),
+            "inclusos": str(inclusos or "").strip(),
+            "status": "Ativo"
+        }
+        supabase.table("catalogo_servicos").insert(payload).execute()
+        return {"sucesso": True, "mensagem": "Serviço cadastrado no catálogo."}
     except Exception as e:
+        print(f"[SUPABASE][catalogo_servicos][insert] payload={{'nome_servico': '{str(nome_servico).strip()}', 'valor_padrao': {float(to_python_scalar(valor_padrao or 0) or 0)}}} erro={e}")
         return {
             "sucesso": False,
             "mensagem": formatar_erro_supabase_tabela_coluna(
                 "catalogo_servicos",
-                ["servico", "valor_sugerido", "inclusos", "status", "nome_servico", "valor_padrao"],
+                ["nome_servico", "valor_padrao", "inclusos", "status"],
                 e,
             ),
         }
 
 
-def atualizar_item_catalogo_servico(escritorio_id: int, item_id: str, servico: str, valor_sugerido: float, inclusos: str, status_item: str):
-    """Atualiza item do catálogo com fallback para variações de colunas."""
+def atualizar_item_catalogo_servico(escritorio_id: int, item_id: str, nome_servico: str, valor_padrao: float, inclusos: str, status_item: str):
+    """Atualiza item do catálogo."""
     try:
         item_id_txt = str(item_id or "").strip()
         if not item_id_txt:
             return {"sucesso": False, "mensagem": "ID do item de catálogo não informado."}
 
-        tentativas_payload = [
-            {
-                "servico": str(servico).strip(),
-                "valor_sugerido": float(to_python_scalar(valor_sugerido or 0) or 0),
-                "inclusos": str(inclusos or "").strip(),
-                "status": str(status_item or "Ativo").strip() or "Ativo"
-            },
-            {
-                "servico": str(servico).strip(),
-                "valor_sugerido": float(to_python_scalar(valor_sugerido or 0) or 0),
-                "status": str(status_item or "Ativo").strip() or "Ativo"
-            },
-            {
-                "nome_servico": str(servico).strip(),
-                "valor_padrao": float(to_python_scalar(valor_sugerido or 0) or 0),
-                "inclusos": str(inclusos or "").strip(),
-                "status": str(status_item or "Ativo").strip() or "Ativo"
-            }
-        ]
-
-        ultimo_erro = None
-        for payload in tentativas_payload:
-            try:
-                supabase.table("catalogo_servicos").update(payload).eq("id", item_id_txt).eq("escritorio_id", int(escritorio_id)).execute()
-                return {"sucesso": True, "mensagem": "Item de catálogo atualizado."}
-            except Exception as e:
-                ultimo_erro = e
-                print(f"[SUPABASE][catalogo_servicos][update] id={item_id_txt} payload={payload} erro={e}")
-
-        raise ultimo_erro or RuntimeError("Falha ao atualizar catálogo de serviços.")
+        payload = {
+            "nome_servico": str(nome_servico).strip(),
+            "valor_padrao": float(to_python_scalar(valor_padrao or 0) or 0),
+            "inclusos": str(inclusos or "").strip(),
+            "status": str(status_item or "Ativo").strip() or "Ativo"
+        }
+        supabase.table("catalogo_servicos").update(payload).eq("id", item_id_txt).eq("escritorio_id", int(escritorio_id)).execute()
+        return {"sucesso": True, "mensagem": "Item de catálogo atualizado."}
     except Exception as e:
+        print(f"[SUPABASE][catalogo_servicos][update] id={str(item_id or '').strip()} payload={{'nome_servico': '{str(nome_servico).strip()}', 'valor_padrao': {float(to_python_scalar(valor_padrao or 0) or 0)}}} erro={e}")
         return {
             "sucesso": False,
             "mensagem": formatar_erro_supabase_tabela_coluna(
                 "catalogo_servicos",
-                ["servico", "valor_sugerido", "inclusos", "status", "nome_servico", "valor_padrao"],
+                ["id", "escritorio_id", "nome_servico", "valor_padrao", "inclusos", "status"],
                 e,
             ),
         }
@@ -2701,7 +2640,7 @@ def render_financeiro():
                             st.success("✅ Serviço cadastrado no catálogo.")
                             st.rerun()
                         else:
-                            st.error(resultado_cat.get("mensagem", "Tabela: catalogo_servicos | Colunas tentadas: servico, valor_sugerido | Falha ao salvar catálogo."))
+                            st.error(resultado_cat.get("mensagem", "Tabela: catalogo_servicos | Colunas tentadas: nome_servico, valor_padrao | Falha ao salvar catálogo."))
 
             catalogo_atual = carregar_catalogo_servicos(int(escritorio_id))
             if catalogo_atual:
@@ -2719,8 +2658,8 @@ def render_financeiro():
                     falhas = []
                     for _, row in df_editavel.iterrows():
                         item_id = str(row.get("id") or "").strip()
-                        nome_item = str(row.get("servico") or "").strip()
-                        valor_item = float(to_python_scalar(row.get("valor_sugerido") or 0) or 0)
+                        nome_item = str(row.get("nome_servico") or "").strip()
+                        valor_item = float(to_python_scalar(row.get("valor_padrao") or 0) or 0)
                         inclusos_item = str(row.get("inclusos") or "").strip()
                         status_item = str(row.get("status") or "Ativo").strip() or "Ativo"
 
@@ -2740,7 +2679,7 @@ def render_financeiro():
                             r = salvar_item_catalogo_servico(int(escritorio_id), nome_item, valor_item, inclusos_item)
 
                         if not r.get("sucesso"):
-                            falhas.append(r.get("mensagem", "Tabela: catalogo_servicos | Colunas tentadas: servico, valor_sugerido | Falha ao salvar item do catálogo."))
+                            falhas.append(r.get("mensagem", "Tabela: catalogo_servicos | Colunas tentadas: nome_servico, valor_padrao | Falha ao salvar item do catálogo."))
 
                     if falhas:
                         st.error(" | ".join(falhas[:3]))
@@ -3824,52 +3763,57 @@ def render_portal_cliente():
             for item in catalogo_bruto
             if str(item.get("nome_servico") or "").strip()
         ]
-        if not opcoes_catalogo:
-            # Fallback de compatibilidade para schemas anteriores.
-            opcoes_catalogo = [
-                str(item.get("servico") or "").strip()
-                for item in catalogo_bruto
-                if str(item.get("servico") or "").strip()
-            ]
         opcoes_catalogo = opcoes_catalogo + ["Outro"]
 
+        mapa_catalogo_por_nome = {
+            str(item.get("nome_servico") or "").strip(): item
+            for item in catalogo_bruto
+            if str(item.get("nome_servico") or "").strip()
+        }
+
+        if "valor_servico_extra_portal" not in st.session_state:
+            st.session_state["valor_servico_extra_portal"] = 0.0
+
+        def _on_change_servico_catalogo_cliente():
+            servico_atual = str(st.session_state.get("sel_servico_catalogo_cliente", "") or "").strip()
+            if not servico_atual or servico_atual == "Outro":
+                st.session_state["valor_servico_extra_portal"] = 0.0
+                return
+            try:
+                res = (
+                    supabase.table("catalogo_servicos")
+                    .select("nome_servico,valor_padrao")
+                    .eq("escritorio_id", int(escritorio_id))
+                    .eq("nome_servico", servico_atual)
+                    .limit(1)
+                    .execute()
+                )
+                item = (res.data or [None])[0]
+                st.session_state["valor_servico_extra_portal"] = float(to_python_scalar((item or {}).get("valor_padrao") or 0) or 0)
+            except Exception as e:
+                print(f"[SUPABASE][catalogo_servicos][callback_valor_padrao] {e}")
+                st.session_state["valor_servico_extra_portal"] = 0.0
+
+        st.selectbox(
+            "Serviço do catálogo",
+            opcoes_catalogo,
+            key="sel_servico_catalogo_cliente",
+            on_change=_on_change_servico_catalogo_cliente
+        )
+        _on_change_servico_catalogo_cliente()
+
         with st.form("form_solicitar_servico_cliente"):
-            servico_sel = st.selectbox("Serviço do catálogo", opcoes_catalogo, key="sel_servico_catalogo_cliente")
+            servico_sel = str(st.session_state.get("sel_servico_catalogo_cliente", opcoes_catalogo[0] if opcoes_catalogo else "Outro") or "").strip()
             servico_manual = ""
-            valor_sugerido = 0.0
+            valor_sugerido = float(to_python_scalar(st.session_state.get("valor_servico_extra_portal", 0.0) or 0.0) or 0.0)
 
             if servico_sel == "Outro":
                 servico_manual = st.text_input("Descreva o serviço manualmente", placeholder="Ex: Retificação específica")
                 titulo_solic = st.text_input("Título da solicitação", placeholder="Ex: Serviço personalizado")
+                st.caption("Valor do Serviço Extra: R$ 0.00")
             else:
-                item_cat = {}
-                try:
-                    item_cat = (
-                        supabase.table("catalogo_servicos")
-                        .select("nome_servico,valor_padrao,inclusos")
-                        .eq("escritorio_id", int(escritorio_id))
-                        .eq("nome_servico", str(servico_sel).strip())
-                        .limit(1)
-                        .execute()
-                        .data
-                        or []
-                    )
-                    item_cat = item_cat[0] if item_cat else {}
-                except Exception as e:
-                    print(f"[SUPABASE][catalogo_servicos][select_nome_servico_valor_padrao] {e}")
-
-                # Fallback local caso a consulta por nome_servico não retorne.
-                if not item_cat:
-                    item_cat = next(
-                        (
-                            i for i in catalogo_bruto
-                            if str(i.get("nome_servico") or i.get("servico") or "").strip() == str(servico_sel).strip()
-                        ),
-                        {},
-                    )
-
-                valor_sugerido = float(to_python_scalar(item_cat.get("valor_padrao") or item_cat.get("valor_sugerido") or 0) or 0)
                 st.caption(f"Valor do Serviço Extra: R$ {valor_sugerido:,.2f}")
+                item_cat = mapa_catalogo_por_nome.get(servico_sel, {})
                 if str(item_cat.get("inclusos") or "").strip():
                     st.caption(f"Inclusos: {str(item_cat.get('inclusos')).strip()}")
                 titulo_solic = st.text_input("Título da solicitação", value=servico_sel)
@@ -3950,6 +3894,20 @@ def render_portal_cliente():
                 contas_receber_cliente = supabase.table("contas_a_receber").select("*").eq("cliente_id", int(empresa_atual)).eq("escritorio_id", escritorio_id).execute().data or []
             except Exception:
                 contas_receber_cliente = []
+            try:
+                contas_receber_baixadas = (
+                    supabase.table("contas_a_receber")
+                    .select("*")
+                    .eq("cliente_id", int(empresa_atual))
+                    .eq("escritorio_id", escritorio_id)
+                    .in_("status", ["Pago", "Baixado"])
+                    .execute()
+                    .data
+                    or []
+                )
+            except Exception as e_hist:
+                print(f"[SUPABASE][contas_a_receber][select_historico_pago_baixado] {e_hist}")
+                contas_receber_baixadas = []
 
             df_financeiro = pd.DataFrame(financeiro_cliente)
             df_receber_cliente = pd.DataFrame(contas_receber_cliente)
@@ -4026,12 +3984,12 @@ def render_portal_cliente():
             df_historico_partes = []
             if not df_financeiro.empty:
                 df_historico_partes.append(df_financeiro.copy())
-            if not df_receber_cliente.empty:
-                df_historico_partes.append(df_receber_cliente.copy())
+            if contas_receber_baixadas:
+                df_historico_partes.append(pd.DataFrame(contas_receber_baixadas))
 
             if df_historico_partes:
                 df_historico = pd.concat(df_historico_partes, ignore_index=True)
-                df_pagas = df_historico[df_historico["status"].astype(str) == "Pago"].copy()
+                df_pagas = df_historico[df_historico["status"].astype(str).isin(["Pago", "Baixado"])].copy()
                 if not df_pagas.empty:
                     df_pagas_exib = pd.DataFrame({
                         "Descrição": df_pagas.get("descricao", "-").fillna("-") if "descricao" in df_pagas.columns else "-",
