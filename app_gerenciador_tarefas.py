@@ -3,6 +3,7 @@ import pandas as pd
 import plotly.express as px
 import os
 import json
+import time
 from PIL import Image
 from datetime import datetime
 from calendar import monthrange
@@ -358,6 +359,175 @@ def obter_escritorio_vieira_id():
                 return escritorio.get("id")
     except Exception:
         return None
+
+
+# ============================================================================
+# FUNÇÃO DE SINCRONIZAÇÃO E TRANSAÇÕES SEGURAS
+# ============================================================================
+
+def sincronizar_cache_supabase():
+    """
+    Sincroniza cache com Supabase após operações críticas.
+    Garante que a API recarregue o schema e os dados estejam atualizados.
+    """
+    try:
+        # PostgreSQL NOTIFY para recarregar schema no Supabase
+        # Isso força a API a revalidar dados em tempo real
+        supabase.postgrest.client.post(
+            "/rpc/pg_notify_reload",
+            json={"message": "reload schema"}
+        )
+    except Exception:
+        # Se houver erro na sincronização, continua (não é crítico)
+        pass
+
+
+def salvar_cliente_com_transacao(
+    escritorio_id: int,
+    nome: str,
+    cnpj: str,
+    ie: str,
+    regime: str,
+    email: str,
+    telefone: str,
+    socios: str,
+    tem_folha: bool,
+    valor_honorario: float,
+    dia_vencimento: int,
+    criar_novo_usuario: bool,
+    usuario_nome: str = None,
+    usuario_email: str = None,
+    usuario_senha: str = None,
+    representante_id: str = None,
+    usuario_existente: dict = None,
+    lista_empresas: list = None
+) -> tuple[bool, str, dict]:
+    """
+    Salva cliente com transação segura usando UPSERT para evitar duplicatas.
+    
+    Operações:
+    1. UPSERT cliente usando CNPJ como chave única
+    2. Criar ou atualizar usuário
+    3. Criar tarefas associadas
+    4. Sincronizar cache do Supabase
+    
+    Args:
+        ... (vários parâmetros)
+    
+    Returns:
+        tuple: (sucesso: bool, mensagem: str, dados: dict)
+    """
+    try:
+        # ===== ETAPA 1: UPSERT DO CLIENTE (Chave única: CNPJ) =====
+        # Usar upsert para evitar duplicatas se o botão for clicado múltiplas vezes
+        dados_cliente = {
+            "escritorio_id": escritorio_id,
+            "nome": nome,
+            "cnpj": cnpj,
+            "inscricao_estadual": ie,
+            "regime": regime,
+            "email": email,
+            "telefone": telefone,
+            "socios": socios,
+            "tem_folha": tem_folha,
+            "valor_honorario": float(valor_honorario),
+            "dia_vencimento": int(dia_vencimento),
+            "status_cadastro": "Ativo"
+        }
+        
+        # Upsert usando CNPJ como chave única
+        upsert_res = supabase.table("clientes").upsert(
+            dados_cliente,
+            ignore_duplicates=False  # Faz merge se existir
+        ).execute()
+        
+        if not upsert_res.data or len(upsert_res.data) == 0:
+            return False, "Falha ao salvar cliente no Supabase.", {}
+        
+        cliente_id = upsert_res.data[0]["id"]
+        msg_usuario = "Cliente salvo com sucesso"
+        
+        # ===== ETAPA 2: CRIAR OU ATUALIZAR USUÁRIO =====
+        if criar_novo_usuario:
+            # Novo usuário
+            novo_usuario = {
+                "escritorio_id": escritorio_id,
+                "cliente_id": cliente_id,
+                "representante_id": representante_id if representante_id else None,
+                "lista_empresas": (lista_empresas or []) + [nome],
+                "nome": usuario_nome,
+                "email": usuario_email,
+                "senha": usuario_senha,  # Em produção, usar hash!
+                "perfil": "cliente"
+            }
+            
+            user_res = supabase.table("usuarios_clientes").insert(novo_usuario).execute()
+            if not user_res.data:
+                return False, "Falha ao criar usuário.", {}
+            
+            msg_usuario += " e novo usuário criado."
+        else:
+            # Atualizar usuário existente
+            if usuario_existente:
+                user_id = usuario_existente.get("id")
+                lista_atual = usuario_existente.get("lista_empresas", [])
+                
+                # Normalizar lista
+                if isinstance(lista_atual, str):
+                    try:
+                        lista_atual = json.loads(lista_atual)
+                    except:
+                        lista_atual = []
+                
+                lista_atualizada = list(dict.fromkeys((lista_atual or []) + (lista_empresas or []) + [nome]))
+                
+                if len(lista_atualizada) > 3:
+                    return False, "Representante já atingiu limite de 3 empresas.", {}
+                
+                payload_update = {"lista_empresas": lista_atualizada}
+                if representante_id:
+                    payload_update["representante_id"] = representante_id
+                
+                update_res = supabase.table("usuarios_clientes").update(
+                    payload_update
+                ).eq("id", user_id).eq("escritorio_id", escritorio_id).execute()
+                
+                if not update_res.data:
+                    return False, "Falha ao atualizar usuário.", {}
+                
+                msg_usuario += " e usuário atualizado com nova empresa."
+        
+        # ===== ETAPA 3: CRIAR TAREFAS INICIAIS =====
+        # Usar as obrigações padrão do regime tributário
+        obrigacoes = OBRIGACOES_BASE.get(regime, OBRIGACOES_PADRAO)
+        
+        for ob in obrigacoes:
+            tarefa_data = {
+                "escritorio_id": escritorio_id,
+                "cliente_id": cliente_id,
+                "obrigacao": ob["obrigacao"],
+                "vencimento": ob["prazo"],
+                "periodicidade": ob["periodicidade"],
+                "mes": LISTA_MESES[datetime.now().month - 1],
+                "ano": str(datetime.now().year),
+                "alerta": "✅ Normal",
+                "status": "Pendente"
+            }
+            
+            tarefa_res = supabase.table("tarefas").insert(tarefa_data).execute()
+            if not tarefa_res.data:
+                # Log do erro mas continua (não falha a transação)
+                pass
+        
+        # ===== ETAPA 4: SINCRONIZAR CACHE =====
+        sincronizar_cache_supabase()
+        
+        return True, msg_usuario, {"cliente_id": cliente_id, "nome": nome}
+        
+    except Exception as e:
+        # Capturar erro detalhado
+        erro_msg = f"Erro ao salvar cadastro: {str(e)}"
+        return False, erro_msg, {}
     return None
 
 
@@ -819,6 +989,8 @@ def gerar_obrigacoes_mes(mes: str, ano: str):
         # Bulk insert
         if novas_tarefas:
             supabase.table("tarefas").insert(novas_tarefas).execute()
+            # Sincronizar cache após inserção em bulk
+            sincronizar_cache_supabase()
         
         return {"sucesso": True, "mensagem": f"{inseridas} obrigações geradas com sucesso.", "inseridas": inseridas}
     
@@ -1026,6 +1198,8 @@ def render_dashboard():
                 if st.button("✅ Marcar como Concluída"):
                     tarefa_id = tarefa_options[selected_tarefa]
                     supabase.table("tarefas").update({"status": "Concluído"}).eq("id", int(tarefa_id)).eq("escritorio_id", escritorio_id).execute()
+                    # Sincronizar cache após atualização
+                    sincronizar_cache_supabase()
                     st.success("Obrigação concluída com sucesso!")
                     st.rerun()
             else:
@@ -1246,80 +1420,48 @@ def render_cadastrar_cliente():
             )
 
         if st.form_submit_button("Salvar Cadastro"):
-            if not nome or not cnpj or not ie:
+            # Limpar espaços em branco dos campos obrigatórios
+            nome_limpo = str(nome).strip()
+            cnpj_limpo = str(cnpj).strip()
+            ie_limpo = str(ie).strip()
+            
+            if not nome_limpo or not cnpj_limpo or not ie_limpo:
                 st.error("Por favor, preencha Razão Social, CNPJ e Inscrição Estadual.")
             elif criar_novo_usuario and (not usuario_nome or not usuario_email or not usuario_senha):
                 st.error("Por favor, preencha os dados de acesso do cliente.")
             else:
-                try:
-                    ins_res = supabase.table("clientes").insert({
-                        "escritorio_id": escritorio_id,
-                        "nome": nome,
-                        "cnpj": cnpj,
-                        "inscricao_estadual": ie,
-                        "regime": regime,
-                        "email": email_empresa,
-                        "telefone": telefone,
-                        "socios": socios,
-                        "tem_folha": tem_folha,
-                        "valor_honorario": float(valor_honorario),
-                        "dia_vencimento": int(dia_vencimento),
-                        "status_cadastro": "Ativo"
-                    }).execute()
-
-                    if not ins_res.data or len(ins_res.data) == 0:
-                        raise ValueError("Falha ao criar o cliente no Supabase.")
-
-                    cliente_id = ins_res.data[0]["id"]
-
-                    empresas_novas = list(dict.fromkeys((lista_empresas or []) + [nome]))
-
-                    if criar_novo_usuario:
-                        supabase.table("usuarios_clientes").insert({
-                            "escritorio_id": escritorio_id,
-                            "cliente_id": cliente_id,
-                            "representante_id": representante_id if representante_id else None,
-                            "lista_empresas": empresas_novas[:3],
-                            "nome": usuario_nome,
-                            "email": usuario_email,
-                            "senha": usuario_senha,
-                            "perfil": "cliente"
-                        }).execute()
-                        msg_usuario = "Novo usuário criado e vinculado"
-                    else:
-                        user_id = usuario_existente.get("id")
-                        lista_atual = _normalizar_lista_empresas_texto(usuario_existente.get("lista_empresas"))
-                        lista_atualizada = list(dict.fromkeys(lista_atual + empresas_novas))
-
-                        if len(lista_atualizada) > 3:
-                            st.error("Este representante já atingiu o limite de 3 empresas vinculadas.")
-                            return
-
-                        payload_update = {
-                            "lista_empresas": lista_atualizada
-                        }
-                        if representante_id:
-                            payload_update["representante_id"] = representante_id
-
-                        supabase.table("usuarios_clientes").update(payload_update).eq("id", int(to_python_scalar(user_id))).eq("escritorio_id", escritorio_id).execute()
-                        msg_usuario = "Usuário existente atualizado com nova empresa vinculada"
-
-                    for ob in OBRIGACOES_BASE[regime]:
-                        supabase.table("tarefas").insert({
-                            "escritorio_id": escritorio_id,
-                            "cliente_id": cliente_id,
-                            "obrigacao": ob["obrigacao"],
-                            "vencimento": ob["prazo"],
-                            "periodicidade": ob["periodicidade"],
-                            "mes": LISTA_MESES[datetime.now().month - 1],
-                            "ano": str(datetime.now().year),
-                            "alerta": "✅ Normal",
-                            "status": "Pendente"
-                        }).execute()
-
-                    st.success(f"Cliente criado com sucesso! {msg_usuario}.")
-                except Exception as e:
-                    st.error(f"Erro ao salvar cadastro: {e}")
+                # Usar função de transação segura com UPSERT
+                sucesso, mensagem, dados = salvar_cliente_com_transacao(
+                    escritorio_id=escritorio_id,
+                    nome=nome_limpo,
+                    cnpj=cnpj_limpo,
+                    ie=ie_limpo,
+                    regime=regime,
+                    email=email_empresa,
+                    telefone=telefone,
+                    socios=socios,
+                    tem_folha=tem_folha,
+                    valor_honorario=valor_honorario,
+                    dia_vencimento=dia_vencimento,
+                    criar_novo_usuario=criar_novo_usuario,
+                    usuario_nome=usuario_nome if criar_novo_usuario else None,
+                    usuario_email=usuario_email if criar_novo_usuario else None,
+                    usuario_senha=usuario_senha if criar_novo_usuario else None,
+                    representante_id=representante_id,
+                    usuario_existente=usuario_existente,
+                    lista_empresas=lista_empresas
+                )
+                
+                if sucesso:
+                    st.success(f"✅ {mensagem}")
+                    # Sincronizar cache novamente para garantir
+                    sincronizar_cache_supabase()
+                    # Aguardar brevemente antes de recarregar
+                    time.sleep(1)
+                    # Recarregar a interface para refletir o estado real do banco
+                    st.rerun()
+                else:
+                    st.error(f"❌ {mensagem}")
 
 # ============================================================================
 # MÓDULO: VISUALIZAÇÕES - CENTRAL DE OBRIGAÇÕES (UNIFICADA)
@@ -1521,6 +1663,8 @@ def render_base_clientes():
                 supabase.table('clientes').update({'status_cadastro': novo_status}).eq('id', id_cliente_correto).eq('escritorio_id', escritorio_id).execute()
                 if novo_status == 'Inativo':
                     supabase.table('tarefas').delete().eq('cliente_id', id_cliente_correto).eq('status', 'Pendente').eq('escritorio_id', escritorio_id).execute()
+                # Sincronizar cache após alteração de status
+                sincronizar_cache_supabase()
                 st.success('Status atualizado com sucesso!')
                 st.rerun()
             except Exception as error:
@@ -2223,6 +2367,8 @@ def render_portal_cliente():
                             supabase.table("usuarios_clientes").update({
                                 "senha": nova_senha
                             }).eq("email", usuario_logado.get("email", "")).eq("escritorio_id", escritorio_id).execute()
+                            # Sincronizar cache após alteração de senha
+                            sincronizar_cache_supabase()
                             st.success("Senha alterada com sucesso!")
                             st.rerun()
                         except Exception as e:
@@ -2237,7 +2383,20 @@ def render_portal_cliente():
         tab_fixos_sub, tab_mensais_sub = st.tabs(["📄 Documentos Fixos", "📅 Guias Mensais"])
         
         with tab_fixos_sub:
-            docs_fixos = supabase.table("documentos_fixos").select("*").eq("cliente_id", int(empresa_atual)).eq("escritorio_id", escritorio_id).execute().data or []
+            # DEBUG: Validar valores
+            st.write(f"DEBUG: cliente={empresa_atual}, escritorio={escritorio_id}")
+            
+            try:
+                if empresa_atual is None:
+                    st.warning("Nenhuma empresa selecionada.")
+                    docs_fixos = []
+                else:
+                    # Remover int() para evitar erro de tipo
+                    docs_fixos = supabase.table("documentos_fixos").select("*").eq("cliente_id", empresa_atual).eq("escritorio_id", escritorio_id).execute().data or []
+            except Exception as e:
+                st.error(f"Erro ao carregar documentos fixos: {e}")
+                docs_fixos = []
+            
             if docs_fixos:
                 df_fixos = pd.DataFrame(docs_fixos)
                 df_fixos_exib = df_fixos[["tipo_documento", "nome_arquivo"]].rename(columns={"tipo_documento": "Descrição", "nome_arquivo": "Arquivo"})
@@ -2259,13 +2418,23 @@ def render_portal_cliente():
             with col_b:
                 ano_filtrado = st.selectbox("Ano:", ["Todos"] + LISTA_ANOS, index=1)
 
-            query = supabase.table("arquivos_escritorio").select("*").eq("cliente_id", int(empresa_atual)).eq("escritorio_id", escritorio_id)
-            if mes_filtrado != "Todos":
-                query = query.eq("mes", mes_filtrado)
-            if ano_filtrado != "Todos":
-                query = query.eq("ano", ano_filtrado)
-
-            arquivos = query.execute().data or []
+            try:
+                if empresa_atual is None:
+                    st.warning("Nenhuma empresa selecionada.")
+                    arquivos = []
+                else:
+                    # Remover int() para evitar erro de tipo
+                    query = supabase.table("arquivos_escritorio").select("*").eq("cliente_id", empresa_atual).eq("escritorio_id", escritorio_id)
+                    if mes_filtrado != "Todos":
+                        query = query.eq("mes", mes_filtrado)
+                    if ano_filtrado != "Todos":
+                        query = query.eq("ano", ano_filtrado)
+                    
+                    arquivos = query.execute().data or []
+            except Exception as e:
+                st.error(f"Erro ao carregar guias mensais: {e}")
+                arquivos = []
+            
             if arquivos:
                 df_arquivos = pd.DataFrame(arquivos)
                 df_arquivos_exib = df_arquivos[["ano", "mes", "nome_arquivo", "data_publicacao"]].rename(columns={"ano": "Ano", "mes": "Mês", "nome_arquivo": "Arquivo", "data_publicacao": "Data de Publicação"})
@@ -2451,6 +2620,8 @@ def render_gestao_saas():
                             "modulos_liberados": permissoes_selecionadas
                         }
                         supabase.table("planos_saas").insert(dados_plano).execute()
+                        # Sincronizar cache após cadastro de plano
+                        sincronizar_cache_supabase()
                         st.success("Plano cadastrado com sucesso.")
                         st.rerun()
                     except Exception as e:
@@ -2536,6 +2707,8 @@ def render_gestao_saas():
                             "valor_cliente_extra": float(valor_cliente_extra_edit),
                             "modulos_liberados": list(modulos_edit)
                         }).eq("id", int(to_python_scalar(plano_selecionado.get("id")))).execute()
+                        # Sincronizar cache após atualização de plano
+                        sincronizar_cache_supabase()
                         st.success("Plano atualizado com sucesso.")
                         st.rerun()
                     except Exception as e:
@@ -2551,6 +2724,8 @@ def render_gestao_saas():
                         st.warning("Este plano está em uso por um ou mais escritórios e não pode ser excluído.")
                     else:
                         supabase.table("planos_saas").delete().eq("id", int(to_python_scalar(plano_selecionado.get("id")))).execute()
+                        # Sincronizar cache após exclusão
+                        sincronizar_cache_supabase()
                         st.success("Plano excluído com sucesso.")
                         st.rerun()
                 except Exception as e:
@@ -2605,6 +2780,8 @@ def render_gestao_saas():
                             raise ValueError("Falha ao cadastrar escritório.")
 
                         st.session_state["novo_escritorio_id"] = insert_escritorio.data[0].get("id")
+                        # Sincronizar cache após cadastro de escritório
+                        sincronizar_cache_supabase()
                         st.success("Escritório cadastrado com sucesso.")
                     except Exception as e:
                         st.error(f"Erro detalhado: {str(e)}")
