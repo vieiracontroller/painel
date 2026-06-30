@@ -1086,35 +1086,157 @@ def gerar_pdf_fatura_automatica(
     valor: float,
     mes_ref: str,
     ano_ref: str,
-    data_vencimento: str
+    data_vencimento: str,
+    cliente_cnpj: str = "",
+    fatura_numero: str = ""
 ) -> bytes:
     try:
         from reportlab.lib.pagesizes import A4
+        from reportlab.lib import colors
+        from reportlab.pdfbase.pdfmetrics import stringWidth
         from reportlab.pdfgen import canvas
     except Exception:
         raise RuntimeError("Biblioteca reportlab indisponível para gerar PDF automático.")
 
+    def _moeda_br(valor_float: float) -> str:
+        valor_txt = f"{float(valor_float or 0):,.2f}"
+        return valor_txt.replace(",", "X").replace(".", ",").replace("X", ".")
+
+    def _texto_quebrado(cnv, texto: str, x: float, y: float, largura_max: float, fonte: str = "Helvetica", tamanho: int = 9, espacamento: float = 12):
+        palavras = str(texto or "").split()
+        linha = ""
+        cnv.setFont(fonte, tamanho)
+        y_atual = y
+        for palavra in palavras:
+            candidata = f"{linha} {palavra}".strip()
+            if stringWidth(candidata, fonte, tamanho) <= largura_max:
+                linha = candidata
+            else:
+                if linha:
+                    cnv.drawString(x, y_atual, linha)
+                    y_atual -= espacamento
+                linha = palavra
+        if linha:
+            cnv.drawString(x, y_atual, linha)
+            y_atual -= espacamento
+        return y_atual
+
+    def _caixa_titulo(cnv, y_topo: float, titulo: str):
+        cnv.setFillColor(colors.HexColor("#EAF1FF"))
+        cnv.roundRect(30, y_topo - 18, 535, 18, 4, fill=1, stroke=0)
+        cnv.setFillColor(colors.HexColor("#1C1A4A"))
+        cnv.setFont("Helvetica-Bold", 10)
+        cnv.drawString(36, y_topo - 13, titulo)
+
     buffer = BytesIO()
     c = canvas.Canvas(buffer, pagesize=A4)
-    largura, altura = A4
+    _, altura = A4
 
-    c.setTitle("Fatura Mensal")
+    prestador_nome = str(st.secrets.get("fatura_prestador_nome", "Fernanda Vieira Ribeiro Serviços") or "Fernanda Vieira Ribeiro Serviços").strip()
+    prestador_cnpj = str(st.secrets.get("fatura_prestador_cnpj", "61.262.602/0001-01") or "61.262.602/0001-01").strip()
+    prestador_crc = str(st.secrets.get("fatura_prestador_crc", "TO-001043/O") or "TO-001043/O").strip()
+    prestador_cidade = str(st.secrets.get("fatura_prestador_cidade", "Palmas - TO") or "Palmas - TO").strip()
+    prestador_email = str(st.secrets.get("fatura_prestador_email", "contato@vieiracontroller.com.br") or "contato@vieiracontroller.com.br").strip()
+    chave_pix = str(st.secrets.get("fatura_chave_pix", prestador_cnpj) or prestador_cnpj).strip()
+    favorecido = str(st.secrets.get("fatura_favorecido", prestador_nome) or prestador_nome).strip()
+
+    agora = datetime.now()
+    numero_fatura = str(fatura_numero or f"#{ano_ref}-{agora.strftime('%m')}{agora.strftime('%d')}")
+
+    c.setTitle(f"Fatura {mes_ref}/{ano_ref}")
+    c.setStrokeColor(colors.HexColor("#C8D6EE"))
+    c.setLineWidth(1)
+    c.roundRect(24, 24, 548, altura - 48, 8, fill=0, stroke=1)
+
+    c.setFillColor(colors.HexColor("#1C1A4A"))
+    c.rect(24, altura - 118, 548, 94, fill=1, stroke=0)
+
+    c.setFillColor(colors.white)
     c.setFont("Helvetica-Bold", 16)
-    c.drawString(40, altura - 60, "FATURA MENSAL")
-    c.setFont("Helvetica", 10)
-    c.drawString(40, altura - 78, "Modelo de referência: Modelo_Fatura_Simples_Nacional.pdf")
+    c.drawString(36, altura - 52, "VIEIRA CONTROLLER")
+    c.setFont("Helvetica", 9)
+    c.drawString(36, altura - 68, prestador_nome)
+    c.drawString(36, altura - 82, f"CNPJ: {prestador_cnpj} | CRC: {prestador_crc}")
+    c.drawString(36, altura - 96, f"{prestador_cidade} | {prestador_email}")
 
-    c.setFont("Helvetica", 12)
-    c.drawString(40, altura - 120, f"Cliente: {str(cliente_nome or '-').strip()}")
-    c.drawString(40, altura - 145, f"Regime Tributário: {str(regime_tributario or '-').strip()}")
-    c.drawString(40, altura - 170, f"Competência: {mes_ref}/{ano_ref}")
-    c.drawString(40, altura - 195, f"Vencimento: {str(data_vencimento or '-').strip()}")
+    c.setFillColor(colors.white)
+    c.setFont("Helvetica-Bold", 17)
+    c.drawRightString(556, altura - 58, "FATURA / RECIBO")
+    c.setFont("Helvetica", 9)
+    c.drawRightString(556, altura - 76, f"FATURA N.: {numero_fatura}")
+    c.drawRightString(556, altura - 90, f"DATA DE EMISSAO: {agora.strftime('%d/%m/%Y')}")
+    c.drawRightString(556, altura - 104, f"VENCIMENTO: {str(data_vencimento or '-').strip()}")
 
-    c.setFont("Helvetica-Bold", 14)
-    c.drawString(40, altura - 235, f"Valor dos Honorários: R$ {float(valor or 0):,.2f}")
+    y = altura - 140
+    _caixa_titulo(c, y, "CONTRATANTE / CLIENTE")
+    y -= 36
 
-    c.setFont("Helvetica", 10)
-    c.drawString(40, 70, f"Emitido em: {datetime.now().strftime('%d/%m/%Y %H:%M')}")
+    c.setFillColor(colors.HexColor("#1A1A1A"))
+    c.setFont("Helvetica-Bold", 11)
+    c.drawString(36, y, str(cliente_nome or "-").strip())
+    y -= 16
+    c.setFont("Helvetica", 9)
+    c.drawString(36, y, f"CNPJ: {str(cliente_cnpj or 'NAO INFORMADO').strip()}")
+    c.drawString(280, y, f"Regime: {str(regime_tributario or '-').strip()}")
+    y -= 24
+
+    _caixa_titulo(c, y, "DESCRICAO DOS SERVICOS PRESTADOS")
+    y -= 28
+
+    c.setStrokeColor(colors.HexColor("#D0D9EA"))
+    c.setFillColor(colors.HexColor("#F6F8FD"))
+    c.rect(36, y - 18, 500, 18, fill=1, stroke=1)
+    c.setFillColor(colors.HexColor("#1C1A4A"))
+    c.setFont("Helvetica-Bold", 9)
+    c.drawString(42, y - 13, "Item / Servico")
+    c.drawRightString(530, y - 13, "Valor")
+
+    y -= 34
+    c.setStrokeColor(colors.HexColor("#DCE3F0"))
+    c.rect(36, y - 54, 500, 54, fill=0, stroke=1)
+    c.setFillColor(colors.black)
+    c.setFont("Helvetica-Bold", 9)
+    c.drawString(42, y - 14, "Honorarios Contabeis Mensais")
+    c.setFont("Helvetica", 8)
+    texto_desc = f"Referente a competencia de {str(mes_ref)}/{str(ano_ref)} em conformidade com a Clausula Quarta do Contrato de Prestacao de Servicos."
+    _ = _texto_quebrado(c, texto_desc, 42, y - 28, 385, fonte="Helvetica", tamanho=8, espacamento=10)
+    c.setFont("Helvetica-Bold", 10)
+    c.drawRightString(530, y - 24, f"R$ {_moeda_br(valor)}")
+
+    y -= 72
+    c.setFillColor(colors.HexColor("#1C1A4A"))
+    c.roundRect(36, y - 26, 500, 24, 4, fill=1, stroke=0)
+    c.setFillColor(colors.white)
+    c.setFont("Helvetica-Bold", 11)
+    c.drawString(42, y - 18, "VALOR TOTAL A PAGAR")
+    c.drawRightString(530, y - 18, f"R$ {_moeda_br(valor)}")
+
+    y -= 42
+    _caixa_titulo(c, y, "DADOS PARA PAGAMENTO")
+    y -= 30
+    c.setFillColor(colors.black)
+    c.setFont("Helvetica", 9)
+    c.drawString(36, y, "Pagamento via transferencia eletronica ou PIX ate o vencimento.")
+    y -= 14
+    c.drawString(36, y, f"Chave PIX (CNPJ): {chave_pix}")
+    y -= 14
+    c.drawString(36, y, f"Favorecido: {favorecido}")
+
+    y -= 24
+    _caixa_titulo(c, y, "DOCUMENTO INFORMATIVO / REGIME TRIBUTARIO")
+    y -= 30
+    c.setFillColor(colors.black)
+    observacao = (
+        "Emitido por microempresa optante pelo Simples Nacional. Nao gera direito a credito fiscal de IPI, "
+        "e nao transfere direito a credito de ICMS ou despesas de insumos aos seus tomadores, "
+        "nos termos da Lei Complementar n 123/2006. Este documento serve como fatura de honorarios "
+        "e recibo de cobranca de servicos profissionais."
+    )
+    y = _texto_quebrado(c, observacao, 36, y, 500, fonte="Helvetica", tamanho=8, espacamento=10)
+
+    c.setFont("Helvetica-Oblique", 7)
+    c.setFillColor(colors.HexColor("#4B5A73"))
+    c.drawString(36, 34, f"Documento gerado automaticamente em {agora.strftime('%d/%m/%Y %H:%M')}")
 
     c.showPage()
     c.save()
@@ -3205,7 +3327,8 @@ def render_financeiro():
                                                         valor=valor_row,
                                                         mes_ref=str(mes_ref),
                                                         ano_ref=str(ano_ref),
-                                                        data_vencimento=vencimento_row
+                                                        data_vencimento=vencimento_row,
+                                                        cliente_cnpj=str(cliente_row.get("cnpj") or "")
                                                     )
                                                     nome_fatura = f"Fatura_{sanitizar_nome_arquivo(nome_cliente_row)}_{mes_ref}_{ano_ref}.pdf"
                                                     salvar_documento_cobranca_cliente(
