@@ -1783,6 +1783,7 @@ def concluir_solicitacao_servico(
             "status": "Concluído",
             "data_conclusao": datetime.now().isoformat(),
             "concluido_por": str(concluido_por).strip(),
+            "anexo_url": caminho_anexo,
             "anexo_resultado": caminho_anexo
         }
         try:
@@ -1793,7 +1794,8 @@ def concluir_solicitacao_servico(
                 "status": "Concluído",
                 "data_conclusao": datetime.now().isoformat(),
                 "concluido_por": str(concluido_por).strip(),
-                "anexo": caminho_anexo
+                "anexo": caminho_anexo,
+                "anexo_url": caminho_anexo
             }
             try:
                 supabase.table("solicitacoes_servicos").update(payload_fallback).eq("id", sid_txt).eq("escritorio_id", int(escritorio_id)).execute()
