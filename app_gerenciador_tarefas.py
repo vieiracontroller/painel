@@ -4194,9 +4194,8 @@ def render_portal_cliente():
             else:
                 item_cat = mapa_catalogo_por_nome.get(servico_sel, {})
                 valor_local = float(to_python_scalar(item_cat.get("valor_padrao") or 0) or 0) if item_cat else 0.0
-                if valor_sugerido <= 0 and valor_local > 0:
-                    valor_sugerido = valor_local
-                    st.session_state["valor_servico_extra_portal"] = valor_local
+                valor_sugerido = valor_local
+                st.session_state["valor_servico_extra_portal"] = valor_local
                 st.caption(f"Valor do Serviço Extra: R$ {valor_sugerido:,.2f}")
                 if str(item_cat.get("inclusos") or "").strip():
                     st.caption(f"Inclusos: {str(item_cat.get('inclusos')).strip()}")
