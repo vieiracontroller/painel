@@ -4151,55 +4151,27 @@ def render_portal_cliente():
             if str(item.get("nome_servico") or "").strip()
         }
 
-        if "valor_servico_extra_portal" not in st.session_state:
-            st.session_state["valor_servico_extra_portal"] = 0.0
-
-        def _on_change_servico_catalogo_cliente():
-            servico_atual = str(st.session_state.get("sel_servico_catalogo_cliente", "") or "").strip()
-            if not servico_atual or servico_atual == "Outro":
-                st.session_state["valor_servico_extra_portal"] = 0.0
-                return
-            try:
-                res = (
-                    supabase.table("catalogo_servicos")
-                    .select("nome_servico,valor_padrao")
-                    .eq("escritorio_id", int(escritorio_id))
-                    .eq("nome_servico", servico_atual)
-                    .limit(1)
-                    .execute()
-                )
-                item = (res.data or [None])[0]
-                st.session_state["valor_servico_extra_portal"] = float(to_python_scalar((item or {}).get("valor_padrao") or 0) or 0)
-            except Exception as e:
-                print(f"[SUPABASE][catalogo_servicos][callback_valor_padrao] {e}")
-                st.session_state["valor_servico_extra_portal"] = 0.0
-
         st.selectbox(
             "Serviço do catálogo",
             opcoes_catalogo,
             key="sel_servico_catalogo_cliente",
-            on_change=_on_change_servico_catalogo_cliente
         )
-        _on_change_servico_catalogo_cliente()
 
         with st.form("form_solicitar_servico_cliente"):
-            servico_sel = str(st.session_state.get("sel_servico_catalogo_cliente", opcoes_catalogo[0] if opcoes_catalogo else "Outro") or "").strip()
-            servico_manual = ""
-            valor_sugerido = float(to_python_scalar(st.session_state.get("valor_servico_extra_portal", 0.0) or 0.0) or 0.0)
+            servico_sel = str(st.session_state.get("sel_servico_catalogo_cliente", opcoes_catalogo[0] if opcoes_catalogo else "") or "").strip()
+            item_cat = mapa_catalogo_por_nome.get(servico_sel, {})
+            if not servico_sel:
+                st.warning("Cadastre ao menos um serviço no catálogo para solicitar atendimento.")
+                st.stop()
 
+            servico_manual = ""
             if servico_sel == "Outro":
                 servico_manual = st.text_input("Descreva o serviço manualmente", placeholder="Ex: Retificação específica")
                 titulo_solic = st.text_input("Título da solicitação", placeholder="Ex: Serviço personalizado")
-                st.caption("Valor do Serviço Extra: R$ 0.00")
             else:
-                item_cat = mapa_catalogo_por_nome.get(servico_sel, {})
-                valor_local = float(to_python_scalar(item_cat.get("valor_padrao") or 0) or 0) if item_cat else 0.0
-                valor_sugerido = valor_local
-                st.session_state["valor_servico_extra_portal"] = valor_local
-                st.caption(f"Valor do Serviço Extra: R$ {valor_sugerido:,.2f}")
+                titulo_solic = st.text_input("Título da solicitação", value=servico_sel)
                 if str(item_cat.get("inclusos") or "").strip():
                     st.caption(f"Inclusos: {str(item_cat.get('inclusos')).strip()}")
-                titulo_solic = st.text_input("Título da solicitação", value=servico_sel)
 
             descricao_solic = st.text_area("Descreva o serviço solicitado", placeholder="Detalhe o que precisa e prazo desejado...")
             prioridade_solic = st.selectbox("Prioridade", ["Baixa", "Normal", "Alta", "Urgente"], index=1)
@@ -4211,7 +4183,7 @@ def render_portal_cliente():
 
             if st.form_submit_button("Enviar Solicitação"):
                 servico_final = servico_sel if servico_sel != "Outro" else servico_manual
-                if not str(servico_final).strip():
+                if not servico_final.strip():
                     st.error("Informe o serviço solicitado.")
                 elif not titulo_solic.strip() or not descricao_solic.strip():
                     st.error("Preencha título e descrição da solicitação.")
