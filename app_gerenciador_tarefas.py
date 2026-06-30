@@ -12,6 +12,12 @@ from calendar import monthrange
 from supabase import create_client, Client
 from streamlit_option_menu import option_menu
 
+st.set_page_config(
+    page_title="V-Controll Hub",
+    layout="centered",
+    initial_sidebar_state="collapsed"
+)
+
 st.markdown(
     """
     <meta name="mobile-web-app-capable" content="yes">
@@ -46,13 +52,6 @@ ADMIN_MASTER_EMAIL = str(st.secrets.get("admin_master_email", "vieiracontroller@
 # ============================================================================
 # CONFIGURAÇÃO DE IDENTIDADE VISUAL - V-CONTROLL HUB
 # ============================================================================
-
-# Configuração da página com tema V-Controll
-st.set_page_config(
-    page_title="V-Controll Hub",
-    layout="wide",
-    initial_sidebar_state="expanded"
-)
 
 # Tema customizado com cores da logo V-Controll
 CORES_VCONTROLL = {
@@ -91,10 +90,38 @@ st.markdown(f"""
     .stButton>button {{
         background-color: {CORES_VCONTROLL['azul_escuro']} !important;
         color: {CORES_VCONTROLL['branco']} !important;
+        width: 100% !important;
     }}
     
     .stButton>button:hover {{
         background-color: {CORES_VCONTROLL['azul_claro']} !important;
+    }}
+
+    .stSelectbox, .stTextInput, .stTextArea, .stNumberInput, .stDateInput {{
+        width: 100% !important;
+    }}
+
+    [data-testid="stDataFrame"] {{
+        width: 100% !important;
+    }}
+
+    .block-container {{
+        padding-top: 1.25rem;
+        padding-bottom: 1.25rem;
+        padding-left: 1rem;
+        padding-right: 1rem;
+        max-width: 100% !important;
+    }}
+
+    @media (max-width: 768px) {{
+        .block-container {{
+            padding-left: 0.75rem;
+            padding-right: 0.75rem;
+        }}
+
+        [data-testid="stHorizontalBlock"] {{
+            gap: 0.5rem;
+        }}
     }}
 </style>
 """, unsafe_allow_html=True)
