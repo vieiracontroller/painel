@@ -4,6 +4,8 @@ import plotly.express as px
 import os
 import json
 import time
+import re
+from io import BytesIO
 from PIL import Image
 from datetime import datetime
 from calendar import monthrange
@@ -1048,6 +1050,122 @@ def extrair_mes_ano_data_vencimento(data_vencimento):
         return LISTA_MESES[mes_idx - 1], str(int(dt.year))
     except Exception:
         return "", ""
+
+
+def normalizar_regime_tributario(regime: str) -> str:
+    return str(regime or "").strip().lower()
+
+
+def cliente_exige_fatura_automatica(regime: str) -> bool:
+    regime_norm = normalizar_regime_tributario(regime)
+    return regime_norm in {"simples nacional", "lucro presumido"}
+
+
+def cliente_exige_anexo_nf(regime: str) -> bool:
+    regime_norm = normalizar_regime_tributario(regime)
+    return regime_norm == "lucro real"
+
+
+def sanitizar_nome_arquivo(valor: str) -> str:
+    texto = re.sub(r"[^A-Za-z0-9._-]+", "_", str(valor or "").strip())
+    texto = re.sub(r"_+", "_", texto).strip("_")
+    return texto or "arquivo"
+
+
+def eh_documento_cobranca(nome_arquivo: str) -> bool:
+    nome = str(nome_arquivo or "").strip().lower()
+    return nome.startswith("fatura_") or nome.startswith("notafiscal_")
+
+
+def gerar_pdf_fatura_automatica(
+    cliente_nome: str,
+    regime_tributario: str,
+    valor: float,
+    mes_ref: str,
+    ano_ref: str,
+    data_vencimento: str
+) -> bytes:
+    try:
+        from reportlab.lib.pagesizes import A4
+        from reportlab.pdfgen import canvas
+    except Exception:
+        raise RuntimeError("Biblioteca reportlab indisponível para gerar PDF automático.")
+
+    buffer = BytesIO()
+    c = canvas.Canvas(buffer, pagesize=A4)
+    largura, altura = A4
+
+    c.setTitle("Fatura Mensal")
+    c.setFont("Helvetica-Bold", 16)
+    c.drawString(40, altura - 60, "FATURA MENSAL")
+    c.setFont("Helvetica", 10)
+    c.drawString(40, altura - 78, "Modelo de referência: Modelo_Fatura_Simples_Nacional.pdf")
+
+    c.setFont("Helvetica", 12)
+    c.drawString(40, altura - 120, f"Cliente: {str(cliente_nome or '-').strip()}")
+    c.drawString(40, altura - 145, f"Regime Tributário: {str(regime_tributario or '-').strip()}")
+    c.drawString(40, altura - 170, f"Competência: {mes_ref}/{ano_ref}")
+    c.drawString(40, altura - 195, f"Vencimento: {str(data_vencimento or '-').strip()}")
+
+    c.setFont("Helvetica-Bold", 14)
+    c.drawString(40, altura - 235, f"Valor dos Honorários: R$ {float(valor or 0):,.2f}")
+
+    c.setFont("Helvetica", 10)
+    c.drawString(40, 70, f"Emitido em: {datetime.now().strftime('%d/%m/%Y %H:%M')}")
+
+    c.showPage()
+    c.save()
+    buffer.seek(0)
+    return buffer.getvalue()
+
+
+def salvar_documento_cobranca_cliente(
+    escritorio_id: int,
+    cliente_id,
+    mes_ref: str,
+    ano_ref: str,
+    nome_arquivo: str,
+    arquivo_bytes: bytes,
+    content_type: str
+):
+    timestamp = int(datetime.now().timestamp())
+    nome_limpo = sanitizar_nome_arquivo(nome_arquivo)
+    caminho_storage = f"cobrancas/{cliente_id}/{ano_ref}/{mes_ref}/{timestamp}_{nome_limpo}"
+
+    upload_em_bucket(
+        bucket_nome=BUCKET_DOCS_MENSAIS,
+        caminho_storage=caminho_storage,
+        arquivo_bytes=arquivo_bytes,
+        content_type=content_type or "application/octet-stream"
+    )
+
+    supabase.table("arquivos_escritorio").insert({
+        "escritorio_id": int(escritorio_id),
+        "cliente_id": cliente_id,
+        "ano": str(ano_ref),
+        "mes": str(mes_ref),
+        "nome_arquivo": nome_arquivo,
+        "caminho_storage": caminho_storage,
+        "data_publicacao": datetime.now().strftime("%d/%m/%Y %H:%M")
+    }).execute()
+
+
+def buscar_documentos_cobranca_cliente(escritorio_id: int, cliente_id) -> list[dict]:
+    try:
+        query = (
+            supabase.table("arquivos_escritorio")
+            .select("*")
+            .eq("cliente_id", cliente_id)
+            .eq("escritorio_id", escritorio_id)
+        )
+        try:
+            arquivos = query.order("id", desc=True).execute().data or []
+        except Exception:
+            arquivos = query.execute().data or []
+
+        return [a for a in arquivos if eh_documento_cobranca(a.get("nome_arquivo"))]
+    except Exception:
+        return []
 
 
 def sincronizar_honorario_em_contas_a_receber(
@@ -2930,6 +3048,14 @@ def render_financeiro():
                     clientes_filtro_det,
                     key="filtro_cliente_financeiro_detalhes"
                 )
+                clientes_por_id = {}
+                for cli in clientes_ativos:
+                    try:
+                        cli_id = int(to_python_scalar(cli.get("id") or 0) or 0)
+                    except Exception:
+                        cli_id = 0
+                    if cli_id > 0:
+                        clientes_por_id[cli_id] = cli
 
                 # ===== DEBUG: Validar mês/ano e carregar recebimentos =====
                 try:
@@ -3015,6 +3141,7 @@ def render_financeiro():
                         st.dataframe(df_receber[cols_receber], use_container_width=True)
 
                         st.markdown("### ✅ Baixar Recebimento")
+                        st.caption("Nova ação: Emissão de Cobrança/Anexar NF por regime tributário na lista de pendentes.")
                         pendentes_receber = df_receber[df_receber["status"] == "Pendente"].copy()
                         if pendentes_receber.empty:
                             st.success("Nenhum recebimento pendente para baixa.")
@@ -3025,11 +3152,82 @@ def render_financeiro():
                                 fonte_row = str(row.get("_fonte") or "").strip().lower()
                                 if not row_id_txt and fonte_row != "programado_cliente":
                                     continue
-                                col_info, col_btn = st.columns([5, 1])
+                                col_info, col_acao_cobranca, col_btn = st.columns([4, 3, 1])
+
+                                cliente_id_row = int(to_python_scalar(row.get("cliente_id") or 0) or 0)
+                                cliente_row = clientes_por_id.get(cliente_id_row, {})
+                                nome_cliente_row = str(cliente_row.get("nome") or row.get("descricao") or f"Cliente {cliente_id_row}").strip()
+                                regime_row = str(cliente_row.get("regime_tributario") or "").strip()
+                                tipo_row = str(row.get("tipo") or "").strip().lower()
+                                mensalidade_row = tipo_row == "mensalidade"
+                                vencimento_row = str(row.get("data_vencimento") or "-").strip()
+                                valor_row = float(to_python_scalar(row.get("valor", 0) or 0) or 0)
+
                                 with col_info:
                                     st.write(
                                         f"{str(row.get('descricao', '-'))} | R$ {float(to_python_scalar(row.get('valor', 0) or 0)):,.2f} | Venc: {str(row.get('data_vencimento', '-'))}"
                                     )
+                                    if mensalidade_row:
+                                        st.caption(f"Regime tributário: {regime_row or 'Não informado'}")
+
+                                with col_acao_cobranca:
+                                    if not mensalidade_row:
+                                        st.caption("Ação de cobrança disponível apenas para Mensalidade.")
+                                    elif cliente_exige_fatura_automatica(regime_row):
+                                        if st.button("Gerar Fatura Automática", key=f"btn_gerar_fatura_{row_id_txt}_{idx}_{cliente_id_row}"):
+                                            try:
+                                                pdf_bytes = gerar_pdf_fatura_automatica(
+                                                    cliente_nome=nome_cliente_row,
+                                                    regime_tributario=regime_row,
+                                                    valor=valor_row,
+                                                    mes_ref=str(mes_ref),
+                                                    ano_ref=str(ano_ref),
+                                                    data_vencimento=vencimento_row
+                                                )
+                                                nome_fatura = f"Fatura_{sanitizar_nome_arquivo(nome_cliente_row)}_{mes_ref}_{ano_ref}.pdf"
+                                                salvar_documento_cobranca_cliente(
+                                                    escritorio_id=int(escritorio_id),
+                                                    cliente_id=cliente_id_row,
+                                                    mes_ref=str(mes_ref),
+                                                    ano_ref=str(ano_ref),
+                                                    nome_arquivo=nome_fatura,
+                                                    arquivo_bytes=pdf_bytes,
+                                                    content_type="application/pdf"
+                                                )
+                                                sincronizar_cache_supabase()
+                                                st.success("Fatura automática gerada e vinculada ao cliente/competência.")
+                                                st.rerun()
+                                            except Exception as e:
+                                                st.error(f"Erro ao gerar fatura automática: {e}")
+                                    elif cliente_exige_anexo_nf(regime_row):
+                                        nf_upload = st.file_uploader(
+                                            "Anexar Nota Fiscal (XML/PDF)",
+                                            type=["xml", "pdf"],
+                                            key=f"upload_nf_{row_id_txt}_{idx}_{cliente_id_row}"
+                                        )
+                                        if st.button("Salvar NF", key=f"btn_salvar_nf_{row_id_txt}_{idx}_{cliente_id_row}"):
+                                            if not nf_upload:
+                                                st.error("Selecione o arquivo XML/PDF da Nota Fiscal antes de salvar.")
+                                            else:
+                                                try:
+                                                    nome_nf = f"NotaFiscal_{sanitizar_nome_arquivo(nome_cliente_row)}_{mes_ref}_{ano_ref}_{sanitizar_nome_arquivo(nf_upload.name)}"
+                                                    salvar_documento_cobranca_cliente(
+                                                        escritorio_id=int(escritorio_id),
+                                                        cliente_id=cliente_id_row,
+                                                        mes_ref=str(mes_ref),
+                                                        ano_ref=str(ano_ref),
+                                                        nome_arquivo=nome_nf,
+                                                        arquivo_bytes=nf_upload.getvalue(),
+                                                        content_type=nf_upload.type or "application/octet-stream"
+                                                    )
+                                                    sincronizar_cache_supabase()
+                                                    st.success("Nota Fiscal anexada e vinculada ao cliente/competência.")
+                                                    st.rerun()
+                                                except Exception as e:
+                                                    st.error(f"Erro ao anexar Nota Fiscal: {e}")
+                                    else:
+                                        st.caption("Regime tributário não configurado para emitir cobrança.")
+
                                 with col_btn:
                                     if st.button("Baixar", key=f"btn_receber_pago_{row_id_txt}_{idx}_{fonte_row}"):
                                         try:
@@ -3903,6 +4101,17 @@ def render_portal_cliente():
 
         try:
             financeiro_cliente = supabase.table("financeiro_mensal").select("*").eq("cliente_id", int(empresa_atual)).eq("escritorio_id", escritorio_id).execute().data or []
+            documentos_cobranca_cliente = buscar_documentos_cobranca_cliente(int(escritorio_id), int(empresa_atual))
+            mapa_documento_por_competencia = {}
+            for doc in documentos_cobranca_cliente:
+                mes_doc = str(doc.get("mes") or "").strip()
+                ano_doc = str(doc.get("ano") or "").strip()
+                if not mes_doc or not ano_doc:
+                    continue
+                chave_doc = (mes_doc, ano_doc)
+                if chave_doc not in mapa_documento_por_competencia:
+                    mapa_documento_por_competencia[chave_doc] = doc
+
             try:
                 contas_receber_cliente = supabase.table("contas_a_receber").select("*").eq("cliente_id", int(empresa_atual)).eq("escritorio_id", escritorio_id).execute().data or []
             except Exception:
@@ -4018,6 +4227,22 @@ def render_portal_cliente():
             else:
                 st.info("Não há lançamentos para o mês atual.")
 
+            st.markdown("### 📎 Documento da Mensalidade Atual")
+            doc_mensalidade_atual = mapa_documento_por_competencia.get((mes_atual, ano_atual))
+            if doc_mensalidade_atual:
+                try:
+                    url_doc_atual = gerar_link_assinado(BUCKET_DOCS_MENSAIS, doc_mensalidade_atual.get("caminho_storage"), 120)
+                    if not url_doc_atual:
+                        raise RuntimeError("URL assinada vazia")
+                    st.markdown(
+                        f"<a href=\"{url_doc_atual}\" target=\"_blank\">⬇️ Baixar {doc_mensalidade_atual.get('nome_arquivo', 'Documento de Cobrança')}</a>",
+                        unsafe_allow_html=True
+                    )
+                except Exception:
+                    st.info("Documento disponível, porém não foi possível gerar link de download no momento.")
+            else:
+                st.info("O documento da mensalidade atual ainda não está disponível.")
+
             st.markdown("---")
             st.markdown("### ✅ Histórico de Pagamentos (Pagas)")
             df_historico_partes = []
@@ -4037,6 +4262,48 @@ def render_portal_cliente():
                         "Data de Pagamento": df_pagas.get("data_pagamento", "-").fillna("-") if "data_pagamento" in df_pagas.columns else "-"
                     })
                     st.dataframe(df_pagas_exib, use_container_width=True)
+
+                    st.markdown("### 📎 Downloads por Competência")
+                    competencias_pagamento = []
+                    for _, item_pago in df_pagas.iterrows():
+                        tipo_item = str(item_pago.get("tipo") or "").strip().lower()
+                        desc_item = str(item_pago.get("descricao") or "").strip().lower()
+                        if tipo_item != "mensalidade" and "mensalidade" not in desc_item:
+                            continue
+
+                        mes_item = str(item_pago.get("mes") or "").strip()
+                        ano_item = str(item_pago.get("ano") or "").strip()
+                        if not mes_item or not ano_item:
+                            mes_item, ano_item = extrair_mes_ano_data_vencimento(item_pago.get("data_vencimento"))
+                        if not mes_item or not ano_item:
+                            continue
+                        competencias_pagamento.append((mes_item, ano_item))
+
+                    competencias_unicas = []
+                    vistos_comp = set()
+                    for comp in competencias_pagamento:
+                        if comp in vistos_comp:
+                            continue
+                        vistos_comp.add(comp)
+                        competencias_unicas.append(comp)
+
+                    if competencias_unicas:
+                        for mes_comp, ano_comp in competencias_unicas:
+                            doc_comp = mapa_documento_por_competencia.get((mes_comp, ano_comp))
+                            if not doc_comp:
+                                continue
+                            try:
+                                url_doc_comp = gerar_link_assinado(BUCKET_DOCS_MENSAIS, doc_comp.get("caminho_storage"), 120)
+                                if not url_doc_comp:
+                                    continue
+                                st.markdown(
+                                    f"- {mes_comp}/{ano_comp}: <a href=\"{url_doc_comp}\" target=\"_blank\">Baixar {doc_comp.get('nome_arquivo', 'Documento')}</a>",
+                                    unsafe_allow_html=True
+                                )
+                            except Exception:
+                                continue
+                    else:
+                        st.info("Nenhuma mensalidade paga com documento disponível para download.")
                 else:
                     st.info("Nenhum pagamento já baixado até o momento.")
             else:
