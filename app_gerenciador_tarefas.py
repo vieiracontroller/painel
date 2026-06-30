@@ -37,6 +37,21 @@ st.markdown(
     footer {visibility: hidden;}
     .stAppDeployButton {display:none;}
     div[data-testid='stToolbarActions'] {display:none;}
+
+    @media (max-width: 768px) {
+        [data-testid='stSidebarCollapsedControl'] {
+            display: flex !important;
+            visibility: visible !important;
+            opacity: 1 !important;
+            z-index: 1000 !important;
+        }
+
+        [data-testid='stSidebarCollapsedControl'] button {
+            display: inline-flex !important;
+            visibility: visible !important;
+            opacity: 1 !important;
+        }
+    }
     </style>
     """,
     unsafe_allow_html=True
