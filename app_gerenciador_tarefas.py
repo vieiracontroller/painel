@@ -4242,6 +4242,7 @@ def render_portal_cliente():
         valor_honorario = float(to_python_scalar(cliente.get("valor_honorario", 0) or 0))
         dia_vencimento = int(float(to_python_scalar(cliente.get("dia_vencimento", 20) or 20)))
         data_venc_mensalidade = gerar_data_vencimento(ano_atual, mes_atual, dia_vencimento)
+        documentos_cobranca_cliente = []
 
         try:
             financeiro_cliente = supabase.table("financeiro_mensal").select("*").eq("cliente_id", int(empresa_atual)).eq("escritorio_id", escritorio_id).execute().data or []
@@ -4457,7 +4458,27 @@ def render_portal_cliente():
         
         st.markdown("---")
         st.markdown("### 📎 Documentos Fiscais (NF / Recibos)")
-        st.info("📎 Consulte com o escritório para obter cópias de notas fiscais, recibos e faturas emitidas.")
+        if documentos_cobranca_cliente:
+            st.caption("Documentos de cobrança disponíveis para download.")
+            for doc in documentos_cobranca_cliente:
+                try:
+                    mes_doc = str(doc.get("mes") or "-").strip()
+                    ano_doc = str(doc.get("ano") or "-").strip()
+                    nome_doc = str(doc.get("nome_arquivo") or "Documento").strip()
+                    caminho_doc = str(doc.get("caminho_storage") or "").strip()
+                    if not caminho_doc:
+                        continue
+                    url_doc = gerar_link_assinado(BUCKET_DOCS_MENSAIS, caminho_doc, 120)
+                    if not url_doc:
+                        continue
+                    st.markdown(
+                        f"- {mes_doc}/{ano_doc}: <a href=\"{url_doc}\" target=\"_blank\">Baixar {nome_doc}</a>",
+                        unsafe_allow_html=True
+                    )
+                except Exception:
+                    continue
+        else:
+            st.info("Nenhum documento fiscal (NF/Recibo/Fatura) disponível até o momento.")
 
 
 def render_gestao_saas():
