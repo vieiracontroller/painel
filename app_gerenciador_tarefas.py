@@ -181,6 +181,36 @@ def upload_em_bucket(bucket_nome: str, caminho_storage: str, arquivo_bytes: byte
         )
 
 
+def serializar_caminhos_anexos(caminhos: list[str]) -> str:
+    caminhos_limpos = [str(caminho).strip() for caminho in caminhos if str(caminho).strip()]
+    if not caminhos_limpos:
+        return ""
+    if len(caminhos_limpos) == 1:
+        return caminhos_limpos[0]
+    return json.dumps(caminhos_limpos, ensure_ascii=False)
+
+
+def extrair_caminhos_anexos(valor) -> list[str]:
+    if valor is None:
+        return []
+    if isinstance(valor, (list, tuple)):
+        return [str(item).strip() for item in valor if str(item).strip()]
+
+    texto = str(valor).strip()
+    if not texto:
+        return []
+
+    if texto.startswith("["):
+        try:
+            carregado = json.loads(texto)
+            if isinstance(carregado, list):
+                return [str(item).strip() for item in carregado if str(item).strip()]
+        except json.JSONDecodeError:
+            pass
+
+    return [parte.strip() for parte in re.split(r"\s*(?:\|\||\n|;)\s*", texto) if parte.strip()]
+
+
 def gerar_link_assinado(bucket_nome: str, caminho_storage: str, expira_em_segundos: int = 60):
     """Gera URL assinada com erro amigável de policy."""
     try:
@@ -1589,6 +1619,7 @@ def criar_solicitacao_servico(
     titulo: str,
     descricao: str,
     prioridade: str,
+    anexo_url: str = "",
     solicitante_email: str = "",
 ):
     """Cria uma solicitação do portal do cliente para fila administrativa."""
@@ -1601,6 +1632,7 @@ def criar_solicitacao_servico(
             "titulo": str(titulo).strip(),
             "descricao": str(descricao).strip(),
             "prioridade": str(prioridade).strip() or "Normal",
+            "anexo_url": str(anexo_url).strip(),
             "solicitante_email": str(solicitante_email).strip(),
             "status": "Pendente",
             "data_solicitacao": datetime.now().isoformat()
@@ -1751,7 +1783,7 @@ def concluir_solicitacao_servico(
             "status": "Concluído",
             "data_conclusao": datetime.now().isoformat(),
             "concluido_por": str(concluido_por).strip(),
-            "anexo_url": caminho_anexo
+            "anexo_resultado": caminho_anexo
         }
         try:
             supabase.table("solicitacoes_servicos").update(payload_full).eq("id", sid_txt).eq("escritorio_id", int(escritorio_id)).execute()
@@ -2264,33 +2296,41 @@ def render_upload_documentos():
     if tipo_envio == "Documento Mensal (Guias, Impostos, Movimentos)":
         mes_comp = st.selectbox("Mês:", LISTA_MESES, index=datetime.now().month - 1)
         ano_comp = st.selectbox("Ano:", LISTA_ANOS, index=1)
-        arquivo_upload = st.file_uploader("Arquivo (PDF/XML/XLSX):", type=["pdf", "xml", "zip", "xlsx"])
+        arquivos_upload = st.file_uploader(
+            "Arquivos (PDF/XML/XLSX):",
+            type=["pdf", "xml", "zip", "xlsx"],
+            accept_multiple_files=True
+        )
 
         if st.button("Enviar Mensal"):
-            if not arquivo_upload:
+            if not arquivos_upload:
                 st.error("Anexe um arquivo antes de enviar.")
             else:
                 try:
-                    nome_limpo = f"{id_cliente}_{ano_comp}_{mes_comp}_{int(datetime.now().timestamp())}_{arquivo_upload.name}"
-                    caminho_storage = f"guias/{nome_limpo}"
-                    upload_em_bucket(
-                        bucket_nome=BUCKET_DOCS_MENSAIS,
-                        caminho_storage=caminho_storage,
-                        arquivo_bytes=arquivo_upload.getvalue(),
-                        content_type=arquivo_upload.type or "application/octet-stream"
-                    )
-                    supabase.table("arquivos_escritorio").insert({
-                        "escritorio_id": escritorio_id,
-                        "cliente_id": id_cliente,
-                        "ano": ano_comp,
-                        "mes": mes_comp,
-                        "nome_arquivo": arquivo_upload.name,
-                        "caminho_storage": caminho_storage,
-                        "data_publicacao": datetime.now().strftime("%d/%m/%Y %H:%M")
-                    }).execute()
+                    agora_ts = int(datetime.now().timestamp())
+                    total_envios = 0
+                    for indice, arquivo_upload in enumerate(arquivos_upload, start=1):
+                        nome_limpo = f"{id_cliente}_{ano_comp}_{mes_comp}_{agora_ts}_{indice}_{arquivo_upload.name}"
+                        caminho_storage = f"guias/{nome_limpo}"
+                        upload_em_bucket(
+                            bucket_nome=BUCKET_DOCS_MENSAIS,
+                            caminho_storage=caminho_storage,
+                            arquivo_bytes=arquivo_upload.getvalue(),
+                            content_type=arquivo_upload.type or "application/octet-stream"
+                        )
+                        supabase.table("arquivos_escritorio").insert({
+                            "escritorio_id": escritorio_id,
+                            "cliente_id": id_cliente,
+                            "ano": ano_comp,
+                            "mes": mes_comp,
+                            "nome_arquivo": arquivo_upload.name,
+                            "caminho_storage": caminho_storage,
+                            "data_publicacao": datetime.now().strftime("%d/%m/%Y %H:%M")
+                        }).execute()
+                        total_envios += 1
                     # Sincronizar cache após inserção
                     sincronizar_cache_supabase()
-                    st.success("✅ Documento mensal enviado e salvo na tabela arquivos_escritorio.")
+                    st.success(f"✅ {total_envios} documento(s) mensal(is) enviado(s) e salvo(s) na tabela arquivos_escritorio.")
                     time.sleep(0.5)
                     st.rerun()
                 except Exception as e:
@@ -2359,22 +2399,11 @@ def render_cadastrar_cliente():
         texto_unico = str(valor_lista).strip()
         return [texto_unico] if texto_unico else []
 
-    try:
-        usuarios_res = (
-            supabase.table("usuarios_clientes")
-            .select("id,nome,email,representante_id,lista_empresas")
-            .eq("escritorio_id", escritorio_id)
-            .order("email")
-            .execute()
-        )
-        usuarios_cadastrados = usuarios_res.data or []
-    except Exception:
-        usuarios_cadastrados = []
-
+    usuarios_cadastrados = carregar_usuarios_escritorio()
     mapa_usuarios_por_label = {}
     opcoes_usuario = ["+ Criar novo usuário"]
     for user in usuarios_cadastrados:
-        nome_user = str(user.get("nome") or "Sem nome").strip()
+        nome_user = str(user.get("nome") or "Sem nome").strip() or "Sem nome"
         email_user = str(user.get("email") or "sem-email").strip()
         label_user = f"{nome_user} ({email_user})"
         mapa_usuarios_por_label[label_user] = user
@@ -4175,6 +4204,11 @@ def render_portal_cliente():
 
             descricao_solic = st.text_area("Descreva o serviço solicitado", placeholder="Detalhe o que precisa e prazo desejado...")
             prioridade_solic = st.selectbox("Prioridade", ["Baixa", "Normal", "Alta", "Urgente"], index=1)
+            anexos_solicitacao = st.file_uploader(
+                "Anexos da solicitação (vários arquivos):",
+                type=["pdf", "jpg", "jpeg", "png", "doc", "docx", "xls", "xlsx", "zip"],
+                accept_multiple_files=True
+            )
 
             if st.form_submit_button("Enviar Solicitação"):
                 servico_final = servico_sel if servico_sel != "Outro" else servico_manual
@@ -4183,6 +4217,22 @@ def render_portal_cliente():
                 elif not titulo_solic.strip() or not descricao_solic.strip():
                     st.error("Preencha título e descrição da solicitação.")
                 else:
+                    anexos_serializados = ""
+                    if anexos_solicitacao:
+                        caminhos_anexos = []
+                        token_solicitacao = f"{int(datetime.now().timestamp())}_{int(escritorio_id)}_{int(empresa_atual)}"
+                        for indice, arquivo in enumerate(anexos_solicitacao, start=1):
+                            nome_limpo = f"solic_{token_solicitacao}_{indice}_{arquivo.name}"
+                            caminho_storage = f"solicitacoes-clientes/{int(empresa_atual)}/{token_solicitacao}/{nome_limpo}"
+                            upload_em_bucket(
+                                bucket_nome=BUCKET_SERVICOS_EXTRAS,
+                                caminho_storage=caminho_storage,
+                                arquivo_bytes=arquivo.getvalue(),
+                                content_type=arquivo.type or "application/octet-stream"
+                            )
+                            caminhos_anexos.append(caminho_storage)
+                        anexos_serializados = serializar_caminhos_anexos(caminhos_anexos)
+
                     resultado_solic = criar_solicitacao_servico(
                         escritorio_id=int(escritorio_id),
                         cliente_id=int(empresa_atual),
@@ -4191,6 +4241,7 @@ def render_portal_cliente():
                         titulo=titulo_solic,
                         descricao=descricao_solic,
                         prioridade=prioridade_solic,
+                        anexo_url=anexos_serializados,
                         solicitante_email=str(st.session_state.get("usuario_logado_email", "")),
                     )
                     if resultado_solic.get("sucesso"):
@@ -4210,22 +4261,41 @@ def render_portal_cliente():
             else:
                 st.dataframe(df_solic_cliente, use_container_width=True)
 
+            st.markdown("#### 📎 Anexos das Solicitações")
+            for item in solicitacoes_cliente:
+                caminhos_solicitacao = extrair_caminhos_anexos(item.get("anexo_url") or item.get("anexos_url") or item.get("anexos"))
+                if not caminhos_solicitacao:
+                    continue
+
+                titulo = str(item.get("servico_selecionado") or item.get("titulo") or f"Solicitação #{item.get('id')}").strip()
+                st.markdown(f"**{titulo}**")
+                for caminho_anexo in caminhos_solicitacao:
+                    try:
+                        url_assinada = gerar_link_assinado(BUCKET_SERVICOS_EXTRAS, caminho_anexo, 120)
+                        if url_assinada:
+                            st.markdown(f"- <a href=\"{url_assinada}\" target=\"_blank\">Baixar anexo</a>", unsafe_allow_html=True)
+                    except Exception:
+                        continue
+
             st.markdown("#### 🔗 Anexos de Serviços Concluídos")
             for item in solicitacoes_cliente:
                 if str(item.get("status") or "").strip().lower() != "concluído":
                     continue
-                caminho_anexo = str(item.get("anexo_url") or item.get("anexo") or item.get("anexo_resultado") or "").strip()
-                if not caminho_anexo:
+                caminhos_anexo = extrair_caminhos_anexos(item.get("anexo_resultado") or item.get("anexo") or item.get("anexo_url") or item.get("anexos_url") or item.get("anexos"))
+                if not caminhos_anexo:
                     continue
-                try:
-                    url_assinada = gerar_link_assinado(BUCKET_SERVICOS_EXTRAS, caminho_anexo, 120)
-                    if not url_assinada:
-                        raise RuntimeError("URL assinada vazia")
-                    titulo = str(item.get("servico_selecionado") or item.get("titulo") or f"Solicitação #{item.get('id')}").strip()
-                    data_conc = str(item.get("data_conclusao") or "-")
-                    st.markdown(f"- {titulo} | Concluído em: {data_conc} | <a href=\"{url_assinada}\" target=\"_blank\">Baixar anexo</a>", unsafe_allow_html=True)
-                except Exception:
-                    continue
+                titulo = str(item.get("servico_selecionado") or item.get("titulo") or f"Solicitação #{item.get('id')}").strip()
+                data_conc = str(item.get("data_conclusao") or "-")
+                links = []
+                for caminho_anexo in caminhos_anexo:
+                    try:
+                        url_assinada = gerar_link_assinado(BUCKET_SERVICOS_EXTRAS, caminho_anexo, 120)
+                        if url_assinada:
+                            links.append(f'<a href="{url_assinada}" target="_blank">Baixar anexo</a>')
+                    except Exception:
+                        continue
+                if links:
+                    st.markdown(f"- {titulo} | Concluído em: {data_conc} | " + " | ".join(links), unsafe_allow_html=True)
         else:
             st.info("Você ainda não possui solicitações abertas.")
 
