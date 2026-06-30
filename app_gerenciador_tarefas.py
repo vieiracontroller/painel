@@ -1052,6 +1052,9 @@ def extrair_mes_ano_data_vencimento(data_vencimento):
         return "", ""
 
 
+# ============================================================================
+# MÓDULO: UTILITÁRIOS DE COBRANÇA (REGIME TRIBUTÁRIO / FATURA / NF)
+# ============================================================================
 def normalizar_regime_tributario(regime: str) -> str:
     return str(regime or "").strip().lower()
 
@@ -3173,60 +3176,78 @@ def render_financeiro():
                                 with col_acao_cobranca:
                                     if not mensalidade_row:
                                         st.caption("Ação de cobrança disponível apenas para Mensalidade.")
-                                    elif cliente_exige_fatura_automatica(regime_row):
-                                        if st.button("Gerar Fatura Automática", key=f"btn_gerar_fatura_{row_id_txt}_{idx}_{cliente_id_row}"):
-                                            try:
-                                                pdf_bytes = gerar_pdf_fatura_automatica(
-                                                    cliente_nome=nome_cliente_row,
-                                                    regime_tributario=regime_row,
-                                                    valor=valor_row,
-                                                    mes_ref=str(mes_ref),
-                                                    ano_ref=str(ano_ref),
-                                                    data_vencimento=vencimento_row
-                                                )
-                                                nome_fatura = f"Fatura_{sanitizar_nome_arquivo(nome_cliente_row)}_{mes_ref}_{ano_ref}.pdf"
-                                                salvar_documento_cobranca_cliente(
-                                                    escritorio_id=int(escritorio_id),
-                                                    cliente_id=cliente_id_row,
-                                                    mes_ref=str(mes_ref),
-                                                    ano_ref=str(ano_ref),
-                                                    nome_arquivo=nome_fatura,
-                                                    arquivo_bytes=pdf_bytes,
-                                                    content_type="application/pdf"
-                                                )
-                                                sincronizar_cache_supabase()
-                                                st.success("Fatura automática gerada e vinculada ao cliente/competência.")
-                                                st.rerun()
-                                            except Exception as e:
-                                                st.error(f"Erro ao gerar fatura automática: {e}")
-                                    elif cliente_exige_anexo_nf(regime_row):
-                                        nf_upload = st.file_uploader(
-                                            "Anexar Nota Fiscal (XML/PDF)",
-                                            type=["xml", "pdf"],
-                                            key=f"upload_nf_{row_id_txt}_{idx}_{cliente_id_row}"
+                                    else:
+                                        modo_padrao = "Gerar Fatura Automática"
+                                        sugestao_regime = "Fatura"
+                                        if cliente_exige_anexo_nf(regime_row):
+                                            modo_padrao = "Anexar Nota Fiscal (XML/PDF)"
+                                            sugestao_regime = "NF"
+                                        elif cliente_exige_fatura_automatica(regime_row):
+                                            modo_padrao = "Gerar Fatura Automática"
+                                            sugestao_regime = "Fatura"
+                                        else:
+                                            sugestao_regime = "Não definida"
+
+                                        modo_emissao = st.selectbox(
+                                            "Emitir cobrança como:",
+                                            options=["Gerar Fatura Automática", "Anexar Nota Fiscal (XML/PDF)"],
+                                            index=0 if modo_padrao == "Gerar Fatura Automática" else 1,
+                                            key=f"modo_cobranca_{row_id_txt}_{idx}_{cliente_id_row}"
                                         )
-                                        if st.button("Salvar NF", key=f"btn_salvar_nf_{row_id_txt}_{idx}_{cliente_id_row}"):
-                                            if not nf_upload:
-                                                st.error("Selecione o arquivo XML/PDF da Nota Fiscal antes de salvar.")
-                                            else:
+                                        st.caption(f"Sugestão pelo regime: {sugestao_regime}")
+
+                                        if modo_emissao == "Gerar Fatura Automática":
+                                            if st.button("Gerar Fatura Automática", key=f"btn_gerar_fatura_{row_id_txt}_{idx}_{cliente_id_row}"):
                                                 try:
-                                                    nome_nf = f"NotaFiscal_{sanitizar_nome_arquivo(nome_cliente_row)}_{mes_ref}_{ano_ref}_{sanitizar_nome_arquivo(nf_upload.name)}"
+                                                    pdf_bytes = gerar_pdf_fatura_automatica(
+                                                        cliente_nome=nome_cliente_row,
+                                                        regime_tributario=regime_row,
+                                                        valor=valor_row,
+                                                        mes_ref=str(mes_ref),
+                                                        ano_ref=str(ano_ref),
+                                                        data_vencimento=vencimento_row
+                                                    )
+                                                    nome_fatura = f"Fatura_{sanitizar_nome_arquivo(nome_cliente_row)}_{mes_ref}_{ano_ref}.pdf"
                                                     salvar_documento_cobranca_cliente(
                                                         escritorio_id=int(escritorio_id),
                                                         cliente_id=cliente_id_row,
                                                         mes_ref=str(mes_ref),
                                                         ano_ref=str(ano_ref),
-                                                        nome_arquivo=nome_nf,
-                                                        arquivo_bytes=nf_upload.getvalue(),
-                                                        content_type=nf_upload.type or "application/octet-stream"
+                                                        nome_arquivo=nome_fatura,
+                                                        arquivo_bytes=pdf_bytes,
+                                                        content_type="application/pdf"
                                                     )
                                                     sincronizar_cache_supabase()
-                                                    st.success("Nota Fiscal anexada e vinculada ao cliente/competência.")
+                                                    st.success("Fatura automática gerada e vinculada ao cliente/competência.")
                                                     st.rerun()
                                                 except Exception as e:
-                                                    st.error(f"Erro ao anexar Nota Fiscal: {e}")
-                                    else:
-                                        st.caption("Regime tributário não configurado para emitir cobrança.")
+                                                    st.error(f"Erro ao gerar fatura automática: {e}")
+                                        else:
+                                            nf_upload = st.file_uploader(
+                                                "Anexar Nota Fiscal (XML/PDF)",
+                                                type=["xml", "pdf"],
+                                                key=f"upload_nf_{row_id_txt}_{idx}_{cliente_id_row}"
+                                            )
+                                            if st.button("Salvar NF", key=f"btn_salvar_nf_{row_id_txt}_{idx}_{cliente_id_row}"):
+                                                if not nf_upload:
+                                                    st.error("Selecione o arquivo XML/PDF da Nota Fiscal antes de salvar.")
+                                                else:
+                                                    try:
+                                                        nome_nf = f"NotaFiscal_{sanitizar_nome_arquivo(nome_cliente_row)}_{mes_ref}_{ano_ref}_{sanitizar_nome_arquivo(nf_upload.name)}"
+                                                        salvar_documento_cobranca_cliente(
+                                                            escritorio_id=int(escritorio_id),
+                                                            cliente_id=cliente_id_row,
+                                                            mes_ref=str(mes_ref),
+                                                            ano_ref=str(ano_ref),
+                                                            nome_arquivo=nome_nf,
+                                                            arquivo_bytes=nf_upload.getvalue(),
+                                                            content_type=nf_upload.type or "application/octet-stream"
+                                                        )
+                                                        sincronizar_cache_supabase()
+                                                        st.success("Nota Fiscal anexada e vinculada ao cliente/competência.")
+                                                        st.rerun()
+                                                    except Exception as e:
+                                                        st.error(f"Erro ao anexar Nota Fiscal: {e}")
 
                                 with col_btn:
                                     if st.button("Baixar", key=f"btn_receber_pago_{row_id_txt}_{idx}_{fonte_row}"):
