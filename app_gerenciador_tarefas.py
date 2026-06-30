@@ -15,7 +15,7 @@ from streamlit_option_menu import option_menu
 st.set_page_config(
     page_title="V-Controll Hub",
     layout="centered",
-    initial_sidebar_state="collapsed"
+    initial_sidebar_state="expanded"
 )
 
 st.markdown(
@@ -33,15 +33,10 @@ st.markdown(
 st.markdown(
     """
     <style>
-    /* Esconde o menu de compartilhamento, edição e ícones do Streamlit no topo */
-    #MainMenu {visibility: hidden !important;}
-    header {visibility: hidden !important;}
-
-    /* Esconde o botão de Deploy/Gerenciar aplicativo no canto inferior direito */
-    .stAppDeployButton {display: none !important;}
-
-    /* Esconde o menu de opções (pontinhos) que aparece na barra superior */
-    [data-testid="stToolbar"] {visibility: hidden !important;}
+    #MainMenu {visibility: hidden;}
+    footer {visibility: hidden;}
+    .stAppDeployButton {display:none;}
+    div[data-testid='stToolbar'] {display:none;}
     </style>
     """,
     unsafe_allow_html=True
